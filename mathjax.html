@@ -1,25 +1,36 @@
 <script type="text/javascript" src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
-<script>
+<script type="text/x-mathjax-config">
 MathJax.Hub.Config({
   config: ["MMLorHTML.js"],
-  extensions: ["tex2jax.js"],
+  extensions: ["tex2jax.js","[Contrib]/siunitx/siunitx.js"],
   jax: ["input/TeX"],
   tex2jax: {
     inlineMath: [ ['$','$'], ["\\(","\\)"] ],
     displayMath: [ ['$$','$$'], ["\\[","\\]"] ],
-    processEscapes: false
+    processEscapes: true,
+    // processEnvironments: true,
   },
   TeX: {
-    extensions: ["AMSmath.js", "AMSsymbols.js"],
+    extensions: ["AMSmath.js", "AMSsymbols.js", "sinuitx.js"],
     TagSide: "right",
     TagIndent: ".8em",
     MultLineWidth: "85%",
     equationNumbers: {
-      autoNumber: "AMS",
+      autoNumber: "AMS",      
     },
     unicode: {
-      fonts: "STIXGeneral,'Arial Unicode MS'"
-    }
+    },
+    Macros: {
+      RR: '{\\bf R}',
+      bold: ['{\\bf #1}', 1],
+      ital: ['{\\it #1}', 1],
+      bfit: ['{\\bf{\\it #1}}', 1],
+      varsp: ['{\\style{font-size:#1}{#2}}',2],
+      alenv: ['{\\begin{align*} #1 \\end{align*}}', 1],
+      eqlbl: ['{\\begin{equation} #1 \\end{equation}\\label{#2}}', 2],
+      Si: ['{\\large\\si[per-mode=fraction]{#1}}', 1],
+      sI: ['{\\si[per-mode=symbol]{#1}}', 1],
+    },
   },
   showProcessingMessages: false
 });

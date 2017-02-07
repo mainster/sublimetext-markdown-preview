@@ -23,6 +23,9 @@ def is_ST3():
     ''' check if ST3 based on python version '''
     return sys.version_info >= (3, 0)
 
+# Global var
+refFile = ""
+
 
 if is_ST3():
     from .helper import INSTALLED_DIRECTORY
@@ -80,7 +83,6 @@ DEFAULT_EXT = [
     "meta", "sane_lists", "smarty", "wikilinks",
     "admonition"
 ]
-
 
 def getTempMarkdownPreviewPath(view):
     ''' return a permanent full path of the temp markdown preview file '''
@@ -1176,66 +1178,19 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             # Fallback to Python Markdown
             compiler = MarkdownCompiler()
 
-        #################################################################
-        ######################################## @@@ MDB (07-02-2017) ###
-        #################################################################
-        refFile=""
-        insertPos=-1;
-        mdFile=self.view.file_name()
-        mdFileDir=os.path.dirname(self.view.file_name())
-        TOC_STRING="<!-- temp toc -->\n[TOC]\n\n"
-
-        print("file info: ", os.getcwd())
-        print(mdFile)
-
-        # Search pwd for a markdown file "references" (Quellenangaben).
-        for file in os.listdir(os.path.dirname(self.view.file_name())):
-            m=re.match(r"(.*quellen.*\.mmd)", file, re.I)
-            if m == None:
-                continue
-            else:
-                refFile=os.path.join(mdFileDir, m.group(0))
-
-        # Insert temporary [TOC]
-        self.view.insert(edit, 0, TOC_STRING)
-
-        if refFile != None:
-            # If a reference file has been found, read contents to line buffer.
-            fd = open(refFile, "r+")
-            refBuf = fd.readlines(); fd.close();
-
-            # Search the first line of reference file within current view.
-            tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
-            if tmp.begin() >= 0:
-                # If a reference "chapter" already exists, find region to
-                # be overwritten by the actual refBuf contents.
-                regErase = sublime.Region(tmp.begin(), self.view.size())
-                # Remove old reference chapter.
-                self.view.erase(edit, regErase)
-                # Store insert position for new reference chapter
-                insertPos = tmp.begin();
-            else:
-                # ... if not, append to view.
-                insertPos = self.view.size()
-
-            # Temporary append the reference chapter lines.
-            self.view.insert(edit, insertPos, "" + "".join(refBuf))
-        else:
-            print("\nNo \"Quellenangaben*.mmd\" found!")
+        # #################################################################
+        # ######################################## @@@ MDB (07-02-2017) ###
+        # #################################################################
+        self.temp_toc_refs(edit, 'insert')
 
         # Invoke markdown compiler
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
 
-        # Erase reference chapter after build.
-        self.view.erase(edit, sublime.Region(insertPos, self.view.size()))
+        # #################################################################
+        # ######################################## @@@ MDB (07-02-2017) ###
+        # #################################################################
+        self.temp_toc_refs(edit, 'clear')
 
-        # Erase TOC 
-        while self.view.find(TOC_STRING, 0, sublime.LITERAL).begin() >= 0:
-            self.view.erase(edit, self.view.find(TOC_STRING, 0, sublime.LITERAL))
-
-        #################################################################
-        #################################################################
-        #################################################################
 
         if target in ['disk', 'browser']:
             # do not use LiveReload unless autoreload is enabled
@@ -1313,6 +1268,92 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
+    
+    #################################################################
+    ######################################## @@@ MDB (07-02-2017) ###
+    #################################################################
+    def temp_toc_refs(self, edit, mode='insert'):
+        TOC_STRING="<!-- temp toc -->\n[TOC]\n\n"
+        insertPos=None
+
+        # Load ref chapter
+        refBuf = self.load_refs(r"(.*(quellen|reference).*\.mmd)")
+
+        if mode == 'insert':
+            ## Insert TOC and reference chapter
+            #################################################################
+            if refBuf != None:            
+                tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
+                if tmp.begin() >= 0:
+                    # If a reference "chapter" already exists, find region to
+                    # be overwritten by the actual refBuf contents.
+                    # Store insert position for new reference chapter
+                    insertPos = self.temp_toc_refs(edit, 'clear')
+                
+                if insertPos == None:
+                    insertPos = self.view.size()
+                
+                # Temporary append the reference chapter lines.
+                self.view.insert(edit, insertPos, "" + "".join(refBuf))
+
+            else:
+                print("\nNo \"Quellenangaben*.mmd\" found!")
+
+            # Insert temporary [TOC]
+            self.view.insert(edit, 0, TOC_STRING)
+            return
+
+
+        if mode == 'clear':
+            ## Remove TOC and reference chapter
+            #################################################################
+            # Load ref chapter
+            refBuf = self.load_refs(r"(.*(quellen|reference).*\.mmd)")
+
+            # Search the first line of reference file buffer within current view.
+            tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
+            if tmp.begin() >= 0:
+                # If a reference "chapter" already exists, find region to
+                # be overwritten by the actual refBuf contents.
+                regErase = sublime.Region(tmp.begin(), self.view.size())
+                # Remove old reference chapter.
+                self.view.erase(edit, regErase)
+                # Store insert position for new reference chapter
+
+            # Erase temporary TOC. 
+            while self.view.find(TOC_STRING, 0, sublime.LITERAL).begin() >= 0:
+                self.view.erase(edit, self.view.find(TOC_STRING, 0, sublime.LITERAL))
+
+            # Return region which has possibly been cleared.
+            return tmp
+
+
+    def load_refs(self, refFilePatt=r"(.*quellen.*\.mmd)"):
+        mdFileDir=os.path.dirname(self.view.file_name())
+        refFile=None
+
+        # Search pwd for a markdown file "references" (Quellenangaben).
+        for file in os.listdir(os.path.dirname(self.view.file_name())):
+            m=re.match(refFilePatt, file, re.I)
+            if m == None:
+                continue
+            else:
+                refFile=os.path.join(mdFileDir, m.group(0))
+
+        # refBuf = self.load_refs_from_file(edit, refFile)
+        if refFile != None:
+            # If a reference file has been found, read contents to line buffer.
+            fd = open(refFile, "r+")
+            refBuf = fd.readlines(); 
+            fd.close();
+            return refBuf
+        else:
+            return None
+
+    #################################################################
+    #################################################################
+    #################################################################
+
 
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):

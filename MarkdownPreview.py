@@ -1176,6 +1176,44 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             # Fallback to Python Markdown
             compiler = MarkdownCompiler()
 
+        #################################################################
+        ######################################## @@@ MDB (07-02-2017) ### 
+        #################################################################
+        refFile=""
+
+        # Search pwd for a markdown file "references" (Quellenangaben).
+        for file in os.listdir("."):
+            m=re.match(r"(.*quellen.*\.mmd)", file, re.I)
+            if m == None:
+                continue
+            else:
+                refFile=m.group(0) 
+        
+        if refFile != None:
+            # If a reference file has been found, read contents to line buffer.
+            fd = open(refFile, "r+")    
+            refBuf = fd.readlines(); fd.close();
+
+            # Search the first line of reference file within current view. 
+            tmp = self.view.find(refBuf[0], 0)
+            if tmp.begin() >= 0:
+                # If a reference "chapter" already exists, find region to 
+                # be overwritten by the actual refBuf contents. 
+                regErase = sublime.Region(tmp.begin(), self.view.size())
+                print("Erase region: ", regErase)
+                
+                # Overwrite old reference chapter.
+                self.view.erase(edit, regErase)
+                self.view.insert(edit, tmp.begin(), "" + "".join(refBuf))
+            else:
+                # ... if not, append to view.
+                self.view.insert(edit, self.view.size(), "\n" + "".join(refBuf))
+        else:
+            print("\nNo \"Quellenangaben*.mmd\" found!")
+        #################################################################
+        #################################################################
+        #################################################################
+
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
 
         if target in ['disk', 'browser']:

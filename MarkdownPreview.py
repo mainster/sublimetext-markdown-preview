@@ -1181,25 +1181,30 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # #################################################################
         # ######################################## @@@ MDB (07-02-2017) ###
         # #################################################################
-        
+
         # If a *.sublime-project file exists within the calling markdown file,
         # skip chapter compile modifications!
         DO_CHAPTER_COMPILE=1
-        
-        for file in os.listdir(os.path.dirname(self.view.file_name())):
-            if file.endswith(".sublime-project"):
-                print("Sublime project file", file, "found, skip chapter compile modifications!")
-                DO_CHAPTER_COMPILE = 0
-                break
 
-        if DO_CHAPTER_COMPILE:
-            self.temp_toc_refs(edit, 'insert')
+        if self.view.file_name() != None:
+            for file in os.listdir(os.path.dirname(self.view.file_name())):
+                if file.endswith(".sublime-project"):
+                    print("Sublime project file", file, "found, skip chapter compile modifications!")
+                    DO_CHAPTER_COMPILE = 0
+                    break
+
+            if DO_CHAPTER_COMPILE:
+                self.temp_toc_refs(edit, 'insert')
 
         # Invoke markdown compiler
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
+        # Regexp to remove &#160; pattern in href tag 
+        p = re.compile('(href=\".*)(\&\#160;)(\")', re.VERBOSE)
+        html = p.sub(r'\1\3', html)
 
-        if DO_CHAPTER_COMPILE:
-            self.temp_toc_refs(edit, 'clear')
+        if self.view.file_name() != None:
+            if DO_CHAPTER_COMPILE:
+                self.temp_toc_refs(edit, 'clear')
 
         # #################################################################
         # ######################################## @@@ MDB (07-02-2017) ###
@@ -1281,7 +1286,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
-    
+
     #################################################################
     ######################################## @@@ MDB (07-02-2017) ###
     #################################################################
@@ -1291,22 +1296,33 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
 
         # Load ref chapter
         refBuf = self.load_refs(r"(.*(quellen|reference).*\.mm?d)")
+
+        fd = open("/tmp/MarkdownPreview.refBuff", "w+")
+        fd.writelines(refBuf)
+        fd.close()
+
+        refBuf = [w.replace('=C2=A0', '') for w in refBuf]
+
+        fd = open("/tmp/MarkdownPreview.refBuffenc", "w+")
+        fd.writelines(refBuf)
+        fd.close()
+
         #################################################################
         # print(refBuf)
         if mode == 'insert':
             ## Insert TOC and reference chapter
             #################################################################
-            if refBuf != None:            
+            if refBuf != None:
                 tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
                 if tmp.begin() >= 0:
                     # If a reference "chapter" already exists, find region to
                     # be overwritten by the actual refBuf contents.
                     # Store insert position for new reference chapter
                     insertPos = self.temp_toc_refs(edit, 'clear')
-                
+
                 if insertPos == None:
                     insertPos = self.view.size()
-                
+
                 # Temporary append the reference chapter lines.
                 self.view.insert(edit, insertPos, "" + "".join(refBuf))
             else:
@@ -1320,7 +1336,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             ## Remove TOC and reference chapter
             #################################################################
 
-            if refBuf != None:            
+            if refBuf != None:
                 # Search the first line of reference file buffer within current view.
                 tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
                 if tmp.begin() >= 0:
@@ -1331,7 +1347,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                     self.view.erase(edit, regErase)
                     # Store insert position for new reference chapter
             else:   tmp=None
-            # Erase temporary TOC. 
+            # Erase temporary TOC.
             while self.view.find(TOC_STRING, 0, sublime.LITERAL).begin() >= 0:
                 self.view.erase(edit, self.view.find(TOC_STRING, 0, sublime.LITERAL))
 
@@ -1363,7 +1379,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         if refFile != None:
             # If a reference file has been found, read contents to line buffer.
             fd = open(refFile, "r+")
-            refBuf = fd.readlines(); 
+            refBuf = fd.readlines();
             fd.close();
             return refBuf
         else:
@@ -1375,7 +1391,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
     ##
     ## @param      self       this.
     ## @param      refFile    File path to references chapter.
-    ## @param      chapFile   File path to chapater file. 
+    ## @param      chapFile   File path to chapater file.
     ##
     ## @return     { description_of_the_return_value }
     ##
@@ -1389,7 +1405,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
     #                                 print line
     #         # If a reference file has been found, read contents to line buffer.
     #         fd = open(refFile, "r+")
-    #         refBuf = fd.readlines(); 
+    #         refBuf = fd.readlines();
     #         fd.close();
     #         return refBuf
     #     else:

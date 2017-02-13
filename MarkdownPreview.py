@@ -1181,16 +1181,29 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # #################################################################
         # ######################################## @@@ MDB (07-02-2017) ###
         # #################################################################
-        self.temp_toc_refs(edit, 'insert')
+        
+        # If a *.sublime-project file exists within the calling markdown file,
+        # skip chapter compile modifications!
+        DO_CHAPTER_COMPILE=1
+        
+        for file in os.listdir(os.path.dirname(self.view.file_name())):
+            if file.endswith(".sublime-project"):
+                print("Sublime project file", file, "found, skip chapter compile modifications!")
+                DO_CHAPTER_COMPILE = 0
+                break
+
+        if DO_CHAPTER_COMPILE:
+            self.temp_toc_refs(edit, 'insert')
 
         # Invoke markdown compiler
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
 
+        if DO_CHAPTER_COMPILE:
+            self.temp_toc_refs(edit, 'clear')
+
         # #################################################################
         # ######################################## @@@ MDB (07-02-2017) ###
         # #################################################################
-        self.temp_toc_refs(edit, 'clear')
-
 
         if target in ['disk', 'browser']:
             # do not use LiveReload unless autoreload is enabled
@@ -1277,8 +1290,9 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         insertPos=None
 
         # Load ref chapter
-        refBuf = self.load_refs(r"(.*(quellen|reference).*\.mmd)")
-
+        refBuf = self.load_refs(r"(.*(quellen|reference).*\.mm?d)")
+        #################################################################
+        # print(refBuf)
         if mode == 'insert':
             ## Insert TOC and reference chapter
             #################################################################
@@ -1295,7 +1309,6 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 
                 # Temporary append the reference chapter lines.
                 self.view.insert(edit, insertPos, "" + "".join(refBuf))
-
             else:
                 print("\nNo \"Quellenangaben*.mmd\" found!")
 
@@ -1303,23 +1316,21 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             self.view.insert(edit, 0, TOC_STRING)
             return
 
-
         if mode == 'clear':
             ## Remove TOC and reference chapter
             #################################################################
-            # Load ref chapter
-            refBuf = self.load_refs(r"(.*(quellen|reference).*\.mmd)")
 
-            # Search the first line of reference file buffer within current view.
-            tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
-            if tmp.begin() >= 0:
-                # If a reference "chapter" already exists, find region to
-                # be overwritten by the actual refBuf contents.
-                regErase = sublime.Region(tmp.begin(), self.view.size())
-                # Remove old reference chapter.
-                self.view.erase(edit, regErase)
-                # Store insert position for new reference chapter
-
+            if refBuf != None:            
+                # Search the first line of reference file buffer within current view.
+                tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
+                if tmp.begin() >= 0:
+                    # If a reference "chapter" already exists, find region to
+                    # be overwritten by the actual refBuf contents.
+                    regErase = sublime.Region(tmp.begin(), self.view.size())
+                    # Remove old reference chapter.
+                    self.view.erase(edit, regErase)
+                    # Store insert position for new reference chapter
+            else:   tmp=None
             # Erase temporary TOC. 
             while self.view.find(TOC_STRING, 0, sublime.LITERAL).begin() >= 0:
                 self.view.erase(edit, self.view.find(TOC_STRING, 0, sublime.LITERAL))
@@ -1328,7 +1339,15 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             return tmp
 
 
-    def load_refs(self, refFilePatt=r"(.*quellen.*\.mmd)"):
+    ##
+    ## @brief      Loads references from references chapter markdown file.
+    ##
+    ## @param      self          this.
+    ## @param      refFilePatt   Regex pattern for references chapter file name.
+    ##
+    ## @return     String buffer or None
+    ##
+    def load_refs(self, refFilePatt=r"(.*quellen.*\.mm?d)"):
         mdFileDir=os.path.dirname(self.view.file_name())
         refFile=None
 
@@ -1350,10 +1369,37 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         else:
             return None
 
-    #################################################################
-    #################################################################
-    #################################################################
 
+    ##
+    ## @brief      Provides filter functionality / Strips the references Buffer
+    ##
+    ## @param      self       this.
+    ## @param      refFile    File path to references chapter.
+    ## @param      chapFile   File path to chapater file. 
+    ##
+    ## @return     { description_of_the_return_value }
+    ##
+    # def find_refs_in_chapter(self, refFile, chapFile):
+    #     if refFile != None:
+    #         while k in refFile != None:
+    #             pattern = re.pa)
+    #             with open(refFile) as fd:
+    #                 for line in fd:
+    #                         if pattern.search(line):
+    #                                 print line
+    #         # If a reference file has been found, read contents to line buffer.
+    #         fd = open(refFile, "r+")
+    #         refBuf = fd.readlines(); 
+    #         fd.close();
+    #         return refBuf
+    #     else:
+    #         print("refFile is null!")
+    #         return None
+
+
+    #################################################################
+    #################################################################
+    #################################################################
 
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):

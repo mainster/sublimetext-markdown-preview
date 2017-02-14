@@ -1297,15 +1297,15 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # Load ref chapter
         refBuf = self.load_refs(r"(.*(quellen|reference).*\.mm?d)")
 
-        fd = open("/tmp/MarkdownPreview.refBuff", "w+")
-        fd.writelines(refBuf)
-        fd.close()
+        # fd = open("/tmp/MarkdownPreview.refBuff", "w+")
+        # fd.writelines(refBuf)
+        # fd.close()
 
-        refBuf = [w.replace('=C2=A0', '') for w in refBuf]
+        # refBuf = [w.replace('=C2=A0', '') for w in refBuf]
 
-        fd = open("/tmp/MarkdownPreview.refBuffenc", "w+")
-        fd.writelines(refBuf)
-        fd.close()
+        # fd = open("/tmp/MarkdownPreview.refBuffenc", "w+")
+        # fd.writelines(refBuf)
+        # fd.close()
 
         #################################################################
         # print(refBuf)

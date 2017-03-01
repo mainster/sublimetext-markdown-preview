@@ -1202,6 +1202,8 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         p = re.compile('(href=\".*)(\&\#160;)(\")', re.VERBOSE)
         html = p.sub(r'\1\3', html)
 
+        html = self.addParagraphNumbering(html)
+
         if self.view.file_name() != None:
             if DO_CHAPTER_COMPILE:
                 self.temp_toc_refs(edit, 'clear')
@@ -1354,6 +1356,14 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             # Return region which has possibly been cleared.
             return tmp
 
+    def addParagraphNumbering(self, html):
+        # Insert body class "paragraphNum" into <article class="markdown-body">
+        # <article class="markdown-body paragraphNum">
+        outp = html.replace('article class="markdown-body"', 'article class="markdown-body paragraphNum"')
+        print("html replacement: ", outp)
+        # p = re.compile('(article class\=\"markdown\-body)', re.VERBOSE)
+        # html = p.sub(r'\1 paragraphNum', html)
+        return outp
 
     ##
     ## @brief      Loads references from references chapter markdown file.

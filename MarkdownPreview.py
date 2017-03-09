@@ -1172,6 +1172,8 @@ class MarkdownPreviewSelectCommand(sublime_plugin.TextCommand):
 
 
 class MarkdownPreviewCommand(sublime_plugin.TextCommand):
+    _FILE_ = os.path.basename(__file__)
+
     def run(self, edit, parser='markdown', target='browser'):
         settings = sublime.load_settings('MarkdownPreview.sublime-settings')
 
@@ -1189,8 +1191,38 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             # Fallback to Python Markdown
             compiler = MarkdownCompiler()
 
+        # #################################################################
+        # ######################################## @@@ MDB (07-02-2017) ###
+        # #################################################################
+
+        procInline = False
+        ''' Check if PlantUML inline diagram rendering is enabled in user settings. '''
+        if settings.get("inline_diagram"):
+            print('%s: Invoke PlantUML inline diagram processing...' % self._FILE_)
+            # try:
+            tmpOrig = self.create_temporary_copy(self.view, preserve_ext=True)
+            ''' Process inline replacements '''
+            procInline = self.inline_diagram(self.view, edit)
+            # except Exception:
+                # print('%s: Exception:' % self._FILE_, str(Exception))
+
+        ''' Invoke markdown compiler '''
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
 
+        ''' Undo inline replacements '''
+        if procInline:
+            self.view.replace(edit, sublime.Region(0, self.view.size()), 
+                load_utf8(tmpOrig.name))
+            
+        # ''' ??? BUG ??? '''
+        # ''' Regexp to remove &#160; pattern in href tag '''
+        # p = re.compile('(href=\".*)(\&\#160;)(\")', re.VERBOSE)
+        # html = p.sub(r'\1\3', html)
+
+        # #################################################################
+        # #################################################################
+        # #################################################################
+        #
         if target in ['disk', 'browser']:
             # do not use LiveReload unless autoreload is enabled
             if settings.get('enable_autoreload', True):
@@ -1267,6 +1299,156 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
+
+    #---------------------------------------------------------------------------
+    ## @brief      Provides inline processing and rendering of PlantUML blocks
+    ##             via 3rd party plugin 'sublime_diagram_plugin'.
+    ## @return     diagram_sets or None
+    ##
+    def inline_diagram(self, view, edit):
+        from sublime import error_message
+        from threading import Thread
+        from os.path import splitext
+        from tempfile import NamedTemporaryFile
+        from shutil import copy2
+
+        ''' Try to import sublime_diagram_plugin ''' 
+        if 'sublime_diagram_plugin' in sys.modules:
+            from sublime_diagram_plugin import diagram as diag
+        else:
+            error_message(
+                'sublime_diagram_plugin not available!\n\n'
+                '- Clone package sublime_diagram_plugin into \n%s:\n'
+                'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
+                '- Or disable "inline_diagram" extension via package settings:\n'
+                '{ "inline_diagram": false }\n' % sublime.packages_path())
+
+        ''' Prepare sublime_diagram_plugin for Plant UML block extraction + rendering process '''
+        diag.setup()
+        ACTIVE_PROCESSORS = diag.ACTIVE_PROCESSORS
+        diags = []
+
+        for processor in ACTIVE_PROCESSORS:
+            blocks = []
+            ''' Extract code blocks surrounded by ``` '''
+            cblocks = self.extract_code_blocks(self.view)
+
+            ''' Extract PlantUML code blocks via sublime_diagram_plugin methode '''
+            puml_blocks = processor.extract_blocks(self.view)
+
+            for block in puml_blocks:
+                add = False
+                for cblock in cblocks:
+                    ''' Check if PlantUML block is implemented as "code block" '''
+                    if block.intersects(cblock):
+                        print('%s: block.intersects(cblock): True' % self._FILE_)
+                        add = False
+                        break
+                    add = True
+
+                if add:
+                    attrs = self.get_inline_block_attr(view, block)
+                    blocks.append(view.substr(block))
+
+            if blocks:
+                diags.append((processor, blocks, ))
+
+        ''' Return if no PlantUML code block found '''
+        if not diags:
+            print('%s: No PlantUML blocks!' % self._FILE_)
+            return False
+
+        print('%s: Found %i PlantUML blocks.' % (self._FILE_, len(diags[0][1])))
+
+        srcFile = 'untitled.txt'
+        if view.file_name() is not None:
+            srcFile = view.file_name()
+
+        ''' Process extracted PlantUML blocks via sublime_diagram_plugin '''
+        diagram_files=[]
+        for processor, blocks in diags:
+            diagram_files.extend([
+                blocks,
+                processor.process(
+                    sourceFile=splitext(srcFile)[0] + '-', 
+                    text_blocks=blocks)
+                ])
+
+        diagram_sets=[]
+        for k in range(len(diagram_files[0])):
+            blk_reg = view.find_all(diagram_files[0][k], sublime.LITERAL)
+            diagram_sets.append([
+                blk_reg,                                    # region
+                diagram_files[0][k],                        # block
+                diagram_files[1][k],                        # tempfile
+                (int(view.rowcol(blk_reg[0].end())[0]) -    # lines count
+                int(view.rowcol(blk_reg[0].begin())[0]))
+                ])
+
+        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
+        diag_style_str = '![](%s)'
+        ''' Check if user setting contains markdown/html tag for image placement ''' 
+        if settings.get("inline_diagram_style"):
+            if '%s' not in settings.get("inline_diagram_style"):
+                print('Bad "inline_diagram_style" setting string! It must contain a "%s" formater')
+            else:
+                diag_style_str = settings.get("inline_diagram_style")
+
+        ''' Temporary replace PlantUML block lines by a (markdown) image import line '''
+        for k in range(len(diagram_sets)-1, -1, -1):
+            view.replace(edit, sublime.Region(
+                diagram_sets[k][0][0].begin(),
+                diagram_sets[k][0][0].end() - 1), 
+            diag_style_str % diagram_sets[k][2].name )
+
+        return True
+
+    def get_inline_block_attr(self, view, block):
+        knownAttributes = dict({
+            '@diag_alt_txt': '', 
+            '@diag_style': '',
+            '@diag_align': '',
+            '@diag_float': ''})
+        attrs = list(filter(None, self.view.substr(
+                self.view.find('\n?(@.*\n){1,}', block.end())).split('\n')))
+        print('attrs: ', attrs)
+
+    ##
+    ## @brief      Creates a temporary copy of views content.
+    ## @param      preserve_ext   The preserve extension
+    ## @return     Temporary file wrapper object
+    ##
+    def create_temporary_copy(self, view, preserve_ext=False):
+        from tempfile import NamedTemporaryFile
+        from shutil import copy2
+        '''
+        Copies the source file into a temporary file.
+        Returns a _TemporaryFileWrapper, whose destructor deletes the temp file
+        (i.e. the temp file is deleted when the object goes out of scope).
+        '''
+        tf_suffix=''
+        if preserve_ext:
+            tf_suffix = os.path.splitext(self.view.file_name())[1]
+        tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
+        save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
+        return tf
+
+    #---------------------------------------------------------------------------
+    ## @brief      Extract code blocks surrounded by ```.
+    ## @return     Code blocks as regions.
+    ##
+    def extract_code_blocks(self, view):
+        # ctags = [view.rowcol(cb.begin())[0] for cb in view.find_all('^```.*')]
+        ctags = view.find_all('^```.*')
+
+        ''' Check for even count of code block tags ``` '''
+        if len(ctags) % 2 != 0:
+            print('%s: Warning, odd number of code-block tags ``` found!' % 
+                os.path.basename(__file__))
+            return []
+
+        return [sublime.Region.cover(
+            ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
 
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):

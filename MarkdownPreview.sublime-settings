@@ -52,6 +52,18 @@
     "enable_uml": false,
 
     /*
+        Enable inline PlantUML block processing / rendering.
+        This feature requires 3rd party plugin "sublime_diagram_plugin"
+        (https://github.com/jvantuyl/sublime_diagram_plugin)
+    */
+    "inline_diagram": true,
+    
+    // { width: 200px; }
+    // "inline_diagram_style": "![](%s)",
+    // "inline_diagram_style": "<center>\n![](%s)\n</center>",
+    // "inline_diagram_style": "<center>\n![](%s)\n</center>",
+
+    /*
         Enable highlighting. This enables codehilite extension if not already enabled.
     */
     "enable_highlight": false,

@@ -12,6 +12,9 @@ import time
 import codecs
 import cgi
 import yaml
+# import logging as log
+# from logging import (debug as print, error as eprint, info as iprint )
+# log.BASIC_FORMAT(level=logging.DEBUG, format='%(levelname)s - %(message)s')
 
 pygments_local = {
     'github': 'pygments_css/github.css',
@@ -1172,9 +1175,9 @@ class MarkdownPreviewSelectCommand(sublime_plugin.TextCommand):
 
 
 class MarkdownPreviewCommand(sublime_plugin.TextCommand):
-    _FILE_ = os.path.basename(__file__)
-
     def run(self, edit, parser='markdown', target='browser'):
+        Debug('Nice')
+
         settings = sublime.load_settings('MarkdownPreview.sublime-settings')
 
         # backup parser+target for later saves
@@ -1196,23 +1199,19 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # #################################################################
 
         procInline = False
-        ''' Check if PlantUML inline diagram rendering is enabled in user settings. '''
-        if settings.get("inline_diagram"):
-            print('%s: Invoke PlantUML inline diagram processing...' % self._FILE_)
-            # try:
-            tmpOrig = self.create_temporary_copy(self.view, preserve_ext=True)
-            ''' Process inline replacements '''
-            procInline = self.inline_diagram(self.view, edit)
-            # except Exception:
-                # print('%s: Exception:' % self._FILE_, str(Exception))
 
-        ''' Invoke markdown compiler '''
+        # Check if PlantUML inline diagram rendering is enabled in user settings. 
+        if settings.get("inline_diagram"):
+            inlineUml = InlineUmlDiagram(self.view)
+
+            # Process inline replacements
+            procInline = inlineUml.process(self.view, edit)
+
+        # Invoke markdown compiler 
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
 
-        ''' Undo inline replacements '''
         if procInline:
-            self.view.replace(edit, sublime.Region(0, self.view.size()), 
-                load_utf8(tmpOrig.name))
+            inlineUml.undo_inline_subst(edit)
             
         # ''' ??? BUG ??? '''
         # ''' Regexp to remove &#160; pattern in href tag '''
@@ -1300,156 +1299,6 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
 
-    #---------------------------------------------------------------------------
-    ## @brief      Provides inline processing and rendering of PlantUML blocks
-    ##             via 3rd party plugin 'sublime_diagram_plugin'.
-    ## @return     diagram_sets or None
-    ##
-    def inline_diagram(self, view, edit):
-        from sublime import error_message
-        from threading import Thread
-        from os.path import splitext
-        from tempfile import NamedTemporaryFile
-        from shutil import copy2
-
-        ''' Try to import sublime_diagram_plugin ''' 
-        if 'sublime_diagram_plugin' in sys.modules:
-            from sublime_diagram_plugin import diagram as diag
-        else:
-            error_message(
-                'sublime_diagram_plugin not available!\n\n'
-                '- Clone package sublime_diagram_plugin into \n%s:\n'
-                'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
-                '- Or disable "inline_diagram" extension via package settings:\n'
-                '{ "inline_diagram": false }\n' % sublime.packages_path())
-
-        ''' Prepare sublime_diagram_plugin for Plant UML block extraction + rendering process '''
-        diag.setup()
-        ACTIVE_PROCESSORS = diag.ACTIVE_PROCESSORS
-        diags = []
-
-        for processor in ACTIVE_PROCESSORS:
-            blocks = []
-            ''' Extract code blocks surrounded by ``` '''
-            cblocks = self.extract_code_blocks(self.view)
-
-            ''' Extract PlantUML code blocks via sublime_diagram_plugin methode '''
-            puml_blocks = processor.extract_blocks(self.view)
-
-            for block in puml_blocks:
-                add = False
-                for cblock in cblocks:
-                    ''' Check if PlantUML block is implemented as "code block" '''
-                    if block.intersects(cblock):
-                        print('%s: block.intersects(cblock): True' % self._FILE_)
-                        add = False
-                        break
-                    add = True
-
-                if add:
-                    attrs = self.get_inline_block_attr(view, block)
-                    blocks.append(view.substr(block))
-
-            if blocks:
-                diags.append((processor, blocks, ))
-
-        ''' Return if no PlantUML code block found '''
-        if not diags:
-            print('%s: No PlantUML blocks!' % self._FILE_)
-            return False
-
-        print('%s: Found %i PlantUML blocks.' % (self._FILE_, len(diags[0][1])))
-
-        srcFile = 'untitled.txt'
-        if view.file_name() is not None:
-            srcFile = view.file_name()
-
-        ''' Process extracted PlantUML blocks via sublime_diagram_plugin '''
-        diagram_files=[]
-        for processor, blocks in diags:
-            diagram_files.extend([
-                blocks,
-                processor.process(
-                    sourceFile=splitext(srcFile)[0] + '-', 
-                    text_blocks=blocks)
-                ])
-
-        diagram_sets=[]
-        for k in range(len(diagram_files[0])):
-            blk_reg = view.find_all(diagram_files[0][k], sublime.LITERAL)
-            diagram_sets.append([
-                blk_reg,                                    # region
-                diagram_files[0][k],                        # block
-                diagram_files[1][k],                        # tempfile
-                (int(view.rowcol(blk_reg[0].end())[0]) -    # lines count
-                int(view.rowcol(blk_reg[0].begin())[0]))
-                ])
-
-        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
-        diag_style_str = '![](%s)'
-        ''' Check if user setting contains markdown/html tag for image placement ''' 
-        if settings.get("inline_diagram_style"):
-            if '%s' not in settings.get("inline_diagram_style"):
-                print('Bad "inline_diagram_style" setting string! It must contain a "%s" formater')
-            else:
-                diag_style_str = settings.get("inline_diagram_style")
-
-        ''' Temporary replace PlantUML block lines by a (markdown) image import line '''
-        for k in range(len(diagram_sets)-1, -1, -1):
-            view.replace(edit, sublime.Region(
-                diagram_sets[k][0][0].begin(),
-                diagram_sets[k][0][0].end() - 1), 
-            diag_style_str % diagram_sets[k][2].name )
-
-        return True
-
-    def get_inline_block_attr(self, view, block):
-        knownAttributes = dict({
-            '@diag_alt_txt': '', 
-            '@diag_style': '',
-            '@diag_align': '',
-            '@diag_float': ''})
-        attrs = list(filter(None, self.view.substr(
-                self.view.find('\n?(@.*\n){1,}', block.end())).split('\n')))
-        print('attrs: ', attrs)
-
-    ##
-    ## @brief      Creates a temporary copy of views content.
-    ## @param      preserve_ext   The preserve extension
-    ## @return     Temporary file wrapper object
-    ##
-    def create_temporary_copy(self, view, preserve_ext=False):
-        from tempfile import NamedTemporaryFile
-        from shutil import copy2
-        '''
-        Copies the source file into a temporary file.
-        Returns a _TemporaryFileWrapper, whose destructor deletes the temp file
-        (i.e. the temp file is deleted when the object goes out of scope).
-        '''
-        tf_suffix=''
-        if preserve_ext:
-            tf_suffix = os.path.splitext(self.view.file_name())[1]
-        tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
-        save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
-        return tf
-
-    #---------------------------------------------------------------------------
-    ## @brief      Extract code blocks surrounded by ```.
-    ## @return     Code blocks as regions.
-    ##
-    def extract_code_blocks(self, view):
-        # ctags = [view.rowcol(cb.begin())[0] for cb in view.find_all('^```.*')]
-        ctags = view.find_all('^```.*')
-
-        ''' Check for even count of code block tags ``` '''
-        if len(ctags) % 2 != 0:
-            print('%s: Warning, odd number of code-block tags ``` found!' % 
-                os.path.basename(__file__))
-            return []
-
-        return [sublime.Region.cover(
-            ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
-
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):
     def init_panel(self):
@@ -1527,3 +1376,318 @@ class MarkdownBuildCommand(sublime_plugin.WindowCommand):
             self.puts(_CANNOT_CONVERT)
         self.puts("[Finished in %.1fs]" % (elapsed))
         sublime.status_message("Build finished")
+
+
+from sublime import error_message
+from threading import Thread
+from os.path import splitext
+from tempfile import NamedTemporaryFile
+from shutil import copy2
+import inspect
+from pprint import pprint as pp
+import ast
+import json
+
+# Try to import sublime_diagram_plugin 
+if 'sublime_diagram_plugin' in sys.modules:
+    from sublime_diagram_plugin import diagram as diag
+else:
+    error_message(
+        'sublime_diagram_plugin not available!\n\n'
+        '- Clone package sublime_diagram_plugin into \n%s:\n'
+        'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
+        '- Or disable "inline_diagram" extension via package settings:\n'
+        '{ "inline_diagram": false }\n' % sublime.packages_path())
+
+class UmlBlock(object):
+    region = ''
+    line_count = -1
+
+    def __init__(self, region, blk_str='', blk_attr=None, diagram=None):
+        self.region = region
+        self.blk_str = blk_str
+        self.attrs_dict = blk_attr[0]
+        self.attr_reg = blk_attr[1]
+        self.diagram = diagram
+        Debug('Anothertry')
+
+    def set_diagram(self, diagram):
+        self.diagram = diagram
+
+    def get_diagram(self):
+        return self.diagram
+
+    def get_str(self):
+        return self.blk_str
+
+    def attribute_region(self):
+        return self.attr_reg
+
+    def attribute_dict(self):
+        return self.attrs_dict
+
+
+class InlineUmlDiagram(sublime_plugin.TextCommand):     
+    '''
+    Provides inline processing of PlantUML blocks. Uses sublime_diagram_plugin
+    methods for inline UML block extraction and rendering. Additional inline
+    diagram attributes can be used for html-image-tag customizations (i.e.
+    scaling, style, alignment, ...). Each resulting markdown or html image tag,
+    substitutes it's corresponding PlantUML block in the source view befor the
+    Markdown Preview compiler call is processed. If not disabled in user
+    settings, undo_inline_subst() method reverts the markdown document to the
+    state before UML blocks has been processed inline.
+    '''
+    def process(self, view, edit):
+        ''' Starts inline PlantUML block processing '''
+        self.orig_src = self.create_temporary_copy(preserve_ext=True)
+
+        dprint('Invoke PlantUML inline diagram processing...')
+
+        srcFile = 'untitled.txt'
+        if view.file_name() is not None:
+            srcFile = view.file_name()
+
+        # Prepare sublime_diagram_plugin for Plant UML block extraction +
+        # rendering process        
+        diag.setup()
+        ACTIVE_PROCESSORS = diag.ACTIVE_PROCESSORS
+        diags = []
+
+        for processor in ACTIVE_PROCESSORS:
+            blocks = []
+            # Extract code blocks surrounded by ``` 
+            cblocks = self.extract_code_blocks()
+
+            # Extract PlantUML code blocks via sublime_diagram_plugin methode 
+            puml_blocks = processor.extract_blocks(view)
+
+            for block in puml_blocks:
+                add = False
+                for cblock in cblocks:
+                    # Check if PlantUML block is implemented as "code block" 
+                    if block.intersects(cblock):
+                        dprint('block.intersects(cblock): True')
+                        add = False
+                        break
+                    add = True
+
+                if add:
+                    blocks.append(UmlBlock(
+                        region=block,
+                        blk_str=view.substr(block), 
+                        blk_attr=self.extract_diagram_attr(block),
+                        ))
+
+            if blocks:
+                diags.append((processor, blocks,))
+
+        # Return if no PlantUML code block found 
+        if not diags:
+            dprint('No PlantUML blocks!')
+            return False
+
+        dprint('Found %i PlantUML blocks.' % len(diags[0][1]))
+
+        # Process extracted PlantUML blocks via sublime_diagram_plugin 
+        diagram_files=[]
+        for processor, uml_blocks in diags:
+            diagram_files.extend(processor.process(
+                sourceFile=splitext(srcFile)[0] + '-', 
+                text_blocks=[blk.get_str() for blk in uml_blocks]
+                ))
+
+        for k in range(len(diagram_files)):
+            blk = uml_blocks[k]
+            blk.set_diagram(diagram_files[k])
+            blk.line_count = (int(view.rowcol(blk.region.end())[0]) -
+            int(view.rowcol(blk.region.begin())[0]))
+
+        del diags, diagram_files
+        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
+
+        # Check if user setting contains markdown/html tag for image placement 
+        default_style = settings.get("inline_diagram_default_style")
+        if not default_style:
+            default_style = '![](%s)'
+            print('\n\nError, no default_style declared in settings\n\n')
+            return False
+
+        # Generate markdown/html image tag and replace UML blocks temporary
+        for blk in reversed(uml_blocks):
+            def_style = default_style
+            def_style['src'] = '{0!s}'.format(blk.get_diagram().name)
+            img_tag = self.gen_image_tag(blk, def_style)
+
+            dprint(img_tag) 
+            attrs_reg = blk.attribute_region()
+
+            view.replace( edit, 
+                sublime.Region(blk.region.begin(),
+                blk.region.cover(attrs_reg).end() - 1), 
+                img_tag )
+
+        return True
+
+
+    #---------------------------------------------------------------------------
+    ## @brief      Extract optional inline diagram image/html attributes.
+    ## @return     Returns attrs dict and attributes region as tupel.
+    ##
+    def extract_diagram_attr(self, block):
+        '''
+        Extracts optional attributes for inline diagram image/html tag
+        customizations. Returns a tupel of inline attributes as dict and their
+        region object.
+        '''
+        attr_reg = self.view.find('\n?(@.*\n){1,}', block.end())
+        attrs = dict()
+
+        for sub in list(filter(None, self.view.substr(attr_reg).split('\n'))):
+            pair = (
+                sub.split(':', 1)[0].strip().replace('@diag_',''),
+                sub.split(':', 1)[1].strip()
+                )
+    
+            # Check diagram attribute values on JSON formatting intentions.
+            # if p.findall(pair[1]).__len__():
+            try:
+                attrs[pair[0]] = json.loads(pair[1])
+            except ValueError:
+                print('ValueError occured while trying to json.load() diagram attrs')
+                attrs[pair[0]] = pair[1]
+        pp(attrs)
+        return attrs, attr_reg
+
+
+    ##
+    ## @brief      { function_description }
+    ## @param      self            The object
+    ## @param      block           The block
+    ## @param      default_attrs   The default attributes
+    ## @return     { description_of_the_return_value }
+    ##
+    def gen_image_tag(self, block, default_attrs):
+        '''
+        Generate the inline block replacement string in form of a html <img ../>
+        tag. The diagram image html block can be customized by user settings
+        default attributes "inline_diagram_default_style" or via inline digram
+        attributes (See "inline diagram examples" section in package README).
+        '''
+        defas = default_attrs
+        inlas = block.attribute_dict()
+
+        # Check for inline block attributes
+        if 'image_tag' in inlas.keys():
+            return re.sub(r'\\n', '\n', re.sub(r'(^\"|\"$)', '',
+                inlas['image_tag'].
+                replace('src="%s"', 'src="{0!s}"'.format(defas['src']))))
+
+        # Handle style="..." sub attributes like "float": "right"
+        for subAttr in list(filter(lambda x: x not in defas.keys(), inlas.keys())):
+            inlas['style'][subAttr] = inlas.pop(subAttr).strip('"')
+
+        # Merge dicts "inline attributes" and "default attributes" 
+        for key in list(inlas.keys()):
+            ''' Inline diagram attributes which are not present in defas dict and
+                are string types where handled as style vps. '''
+            if key not in defas.keys():                
+                print('key %s (%s) not in defas' % (
+                    key, type(inlas[key]).__name__))
+                continue
+            defas[key] = inlas.pop(key)
+        del inlas
+
+        imgAttrs=''
+        excl = ('open', 'close', 'style')
+        for key in list(filter(lambda x: x not in excl, defas.keys())):
+            imgAttrs += '{0!s}="{1!s}" '.format(key, defas[key])
+
+        imgStyle = re.sub('[\{\}\"]','', \
+            json.dumps(defas['style'], separators=('; ',': ')))
+
+        return '<img {0!s} style="{1!s}"/>'.format(
+            imgAttrs, imgStyle)
+
+    #---------------------------------------------------------------------------
+    ## @brief      Creates a temporary copy of views content.
+    ## @return     Temporary file wrapper object
+    ##
+    def create_temporary_copy(self, preserve_ext=False):
+        '''
+        Copies the source file into a temporary file. Returns a
+        _TemporaryFileWrapper, whose destructor deletes the temp file (i.e. the
+        temp file is deleted when the object goes out of scope).
+        '''
+        tf_suffix=''
+        if preserve_ext:
+            tf_suffix = os.path.splitext(self.view.file_name())[1]
+        tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
+        save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
+        return tf
+
+
+    #---------------------------------------------------------------------------
+    ## @brief      { function_description }
+    ## @param      self   The object
+    ## @return     { description_of_the_return_value }
+    ##
+    def extract_code_blocks(self):
+        '''
+        Extract all code blocks surrounded by ``` and return it's region
+        objects. If in a later step, some fancy code block ``` region intersect
+        with the current processed PlantUML block region, skip inline processing
+        of this intersecting UML block. As a result, the possibility for
+        markdown fancy UML code blocks remains if no inline rendering is
+        desired.
+        '''       
+        ctags = self.view.find_all('^```.*')
+
+        # Check for even count of code block tags ``` 
+        if len(ctags) % 2 != 0:
+            dprint('Warning, odd number of code-block tags ``` found!')
+            return []
+
+        return [sublime.Region.cover(
+            ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
+
+    def undo_inline_subst(self, edit):
+        ''' Undo inline replacements '''
+        self.view.replace(edit, sublime.Region(0, self.view.size()), 
+            load_utf8(self.orig_src.name))
+
+
+##
+## @brief      { function_description }
+## @param      string   The string
+## @param      args     The arguments
+## @return     { description_of_the_return_value }
+##
+def dprint(string, *args):
+    '''
+    Verbose level configureable debug print methode. Inspects the call stack to
+    receive callers class name. Class dependent verbosity levels can be
+    configured via user settings file. 
+    "debug_levels": { "<class name>": <level> }
+    '''
+    try:
+        caller_class = inspect.stack()[1][0].f_locals["self"].__class__.__name__
+
+        debug_levels = sublime.load_settings(
+            'MarkdownPreview.sublime-settings').get('debug_levels')
+        if not debug_levels or caller_class not in debug_levels.keys():
+            return
+
+        # Only print string from classes with debug level > 1 
+        if debug_levels[caller_class] > 1:
+            print('[ %s ]:' % caller_class, end=' ')
+            if not args:
+                print(string)
+            else:
+                print(string, args)
+    except:
+        if not args:
+            print(string)
+        else:
+            print(string, args)
+

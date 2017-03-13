@@ -1407,30 +1407,12 @@ class UmlBlock(object):
         self.blk_reg = blk_reg
         self.blk_str = blk_str
         self.attr_dict = blk_attr[0]
-        self.attr_reg = blk_attr[0]
-
-        print('passed blk_reg:', blk_attr)
-
-        if blk_attr[1]:
-            if type(blk_attr[1][0]).__name__ == 'str':
-                self.attr_reg = [blk_attr[1]]
-            else:
-                # If block of attributes is given, check if attributes are neighbors
-                self.attr_reg = [blk_attr[1].pop(0)]
-
-                # TODO: TEST if only one attr where given as list
-                for reg in blk_attr[1]:
-                    if (reg.begin() - 1) != self.attr_reg[len(self.attr_reg)-1].end():
-                        break
-                    self.attr_reg.append(reg)
-
-                print('neighbors attr regions:', self.attr_reg)
-
+        self.attr_reg = blk_attr[1]
         self.diagram = diagram
 
     def get_replace_reg(self):
         if not self.blk_reg:
-            print('[ {0!s} ]: Error, self.blk_reg is None'.format(__FILE__))
+            dprint('Error, self.blk_reg is None')
             return None
 
         # If no diag attrs where given, replace uml block region
@@ -1477,12 +1459,12 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         for processor in ACTIVE_PROCESSORS:
             blocks = []
+
             # Extract code blocks surrounded by ``` 
             cblocks = self.extract_code_blocks()
 
             # Extract PlantUML code blocks via sublime_diagram_plugin methode 
             puml_blocks = processor.extract_blocks(view)
-            dprint(puml_blocks)
 
             for block in puml_blocks:
                 add = True
@@ -1491,12 +1473,16 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
                     if block.intersects(cblock):
                         add = False
                         break
-
+            
                 if add:
+                    # Extract optional PlantUML diagram attributes 
+                    attrsDict = self.extract_diagram_attrs(block)
+                    dprint('found %i diag attrs: ' % len(attrsDict), attrsDict)
+
                     blocks.append(UmlBlock(
                         blk_reg=block,
                         blk_str=view.substr(block), 
-                        blk_attr=self.extract_diagram_attr(block),
+                        blk_attr=attrsDict,
                         ))
 
             if blocks:
@@ -1504,7 +1490,8 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         # Return if no PlantUML code block found 
         if not diags:
-            dprint('No PlantUML blocks!')
+            dprint('No PlantUML blocks found!')
+            osd.info('No PlantUML blocks found!').send()
             return False
 
         dprint('Found %i PlantUML blocks.' % len(diags[0][1]))
@@ -1526,7 +1513,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         del diags, diagram_files
         settings = sublime.load_settings('MarkdownPreview.sublime-settings')
 
-        # Check if user setting contains markdown/html tag for image placement 
+        # Check if user setting contains default markdown/html tag 
         default_style = settings.get("inline_diagram_default_style")
         if not default_style:
             dprint('No default_style declared in settings.')
@@ -1534,7 +1521,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             default_style = {
             "src":   "",
             "class": "",
-            "style": "",
+            "style": {},
             "title": "",
             }
 
@@ -1544,64 +1531,41 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             def_style['src'] = '{0!s}'.format(blk.diagram.name)
             img_tag = self.gen_image_tag(blk, def_style)
             dprint(img_tag) 
-
             view.replace(edit, blk.get_replace_reg(), img_tag)
 
         return True
 
-    def extract_diagram_attr(self, block):
+    def extract_diagram_attrs(self, block):
         '''
-        Extracts optional attributes for inline diagram image/html tag
-        customizations. Returns a tupel of inline attributes as dict and their
-        region object.
+        Extracts optional attributes for diagram image/html tag customizations. 
+        Returns a tupel of sequential inline attributes as dict and their
+        regions as list object.
         '''
-        __attr_reg = [r for r in self.view.find_all('^@diag_.*$', block.end()) if \
-            '@startuml' not in self.view.substr(r) and 
-            '@enduml' not in self.view.substr(r)]
+        attr_regs = []
+        attrsDict = dict()
+        jattrsDict = dict()
 
-        print('__attr_reg: ', __attr_reg)
+        # Find sequential related regions of @diag_ attribute lines
+        next_line = self.view.line(block.end()+1)
+        while '@diag_' in self.view.substr(next_line):
+            attr_regs.append(next_line)
+            next_line = self.view.line(attr_regs[len(attr_regs)-1].end()+1)
 
-        attr_reg = []
-        if __attr_reg:
-            # Only if attributes are neighbors
-            print(__attr_reg[0], block)
-            if (__attr_reg[0].begin() - block.end()) <= 1:
-                attr_reg.append(__attr_reg.pop(0))
-                for reg in __attr_reg:
-                    if (attr_reg[len(attr_reg)-1].end() - reg.begin()) > 1:
-                        break
-                    attr_reg.append(reg)
-            else:
-                __attr_reg = []
-                attr_reg = []
+        for attr in attr_regs:            
+            # Split attr into dict key and value
+            key=self.view.substr(attr).split(':', 1)[0].strip().replace('@diag_','')
+            attrsDict[key]=self.view.substr(attr).split(':', 1)[1].strip()
 
-        # attr_reg = self.view.find('\n?(@.*\n){1,}', block.end())
-        dprint('found %i attrs' % len(attr_reg))
-
-        # If no @s found
-        if not attr_reg:
-            osd.info('No inline attrs').send()
-            return None, None
-
-        attrs = dict()
-
-        # for sub in list(filter(None, self.view.substr(attr_reg).split('\n'))):
-        for attr in attr_reg:
-            pair = (
-                self.view.substr(attr).split(':', 1)[0].strip().replace('@diag_',''),
-                self.view.substr(attr).split(':', 1)[1].strip()
-                )
-    
-            # Check diagram attribute values on JSON formatting intentions.
-            # if p.findall(pair[1]).__len__():
+            # Check diagram attribute values for JSON compatibility.
             try:
-                attrs[pair[0]] = json.loads(pair[1])
+                jattrsDict[key] = json.loads(attrsDict[key])
             except ValueError:
-                print('ValueError occured while trying to json.load() diagram attrs')
-                attrs[pair[0]] = pair[1]
-
-        pp(attrs)
-        return attrs, attr_reg
+                errMsg = 'ValueError occured while trying to json.load() diagram attrs'
+                osd.error(errMsg).send()
+                print(errMsg)
+                return dict(), list()
+           
+        return jattrsDict, attr_regs
 
     def gen_image_tag(self, block, default_attrs):
         '''
@@ -1612,6 +1576,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         '''
         defas = default_attrs
 
+        dprint('gen_image_tag block: ', block.attr_dict)
         if block.attr_dict:
             inlas = block.attr_dict
             # Check for inline block attributes
@@ -1642,16 +1607,16 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
                 defas[key] = inlas.pop(key)
             del inlas
 
+        dprint('defas: ', defas)
+
         imgAttrs=''
-        excl = ['style']
-        for key in list(filter(lambda x: x not in excl, defas.keys())):
+        for key in list(filter(lambda x: x not in ['style'], defas.keys())):
             imgAttrs += '{0!s}="{1!s}" '.format(key, defas[key])
 
         imgStyle = re.sub('[\{\}\"]','', \
             json.dumps(defas['style'], separators=('; ',': ')))
 
-        return '<img {0!s} style="{1!s}"/>'.format(
-            imgAttrs, imgStyle)
+        return '<img {0!s} style="{1!s}"/>'.format(imgAttrs, imgStyle)
 
     def create_temporary_copy(self, preserve_ext=False):
         '''
@@ -1702,22 +1667,27 @@ def dprint(string, *args):
     '''
     try:
         caller_class = inspect.stack()[1][0].f_locals["self"].__class__.__name__
+        caller_method = inspect.stack()[1][0].f_code.co_name
 
-        debug_levels = sublime.load_settings(
-            'MarkdownPreview.sublime-settings').get('debug_levels')
-        if not debug_levels or caller_class not in debug_levels.keys():
-            return
+        # debug_levels = sublime.load_settings(
+        #     'MarkdownPreview.sublime-settings').get('debug_levels')
+        # if not debug_levels or caller_class not in debug_levels.keys():
+        #     return
+
+        debug_levels={caller_class:2}
 
         # Only print string from classes with debug level > 1 
         if debug_levels[caller_class] > 1:
-            print('[ %s ]:' % caller_class, end=' ')
-            if not args:
-                print(string)
-            else:
-                print(string, args)
+            print('[ {0!s}.{1!s} ]: {2!s}'.format(
+                caller_class, 
+                caller_method,
+                string), end=' ')
+            if args:
+                for arg in args:
+                    print(arg, end=' ')
+                print(' ')
     except:
         if not args:
             print(string)
         else:
             print(string, args)
-

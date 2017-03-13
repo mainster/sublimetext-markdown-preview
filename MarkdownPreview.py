@@ -1383,9 +1383,10 @@ from sublime import error_message
 from threading import Thread
 from os.path import splitext
 from tempfile import NamedTemporaryFile
-from shutil import copy2
+from shutil import copy2, move
+from datetime import datetime
+# from pprint import pprint as pp
 import inspect
-from pprint import pprint as pp
 import ast
 import json
 
@@ -1505,6 +1506,9 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         for k in range(len(diagram_files)):
             blk = uml_blocks[k]
+
+            diagram_files[k].name = self.move_to_export_dir(diagram_files[k], k)
+
             blk.diagram = diagram_files[k]
             blk.line_count = (int(view.rowcol(blk.blk_reg.end())[0]) -
             int(view.rowcol(blk.blk_reg.begin())[0]))
@@ -1518,6 +1522,39 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             view.replace(edit, blk.get_replace_reg(), img_tag)
 
         return True
+
+    def move_to_export_dir(self, diagram_file, suffix):
+        '''
+        Move/rename diagram_file to export dir specified in settings
+        "inline_diagram_export_dir" 
+        '''
+        exportDir = sublime.load_settings(
+            'MarkdownPreview.sublime-settings').get(
+            'inline_diagram_export_dir')
+
+        # Expand variables
+        exportDir = sublime.expand_variables(exportDir, 
+            self.view.window().extract_variables())
+
+        if not exportDir:
+            exportDir = os.path.dirname(self.view.file_name())
+        if not os.path.exists(exportDir):
+            os.makedirs(exportDir)                
+
+        diagFilePath = os.path.join(exportDir, 
+            '{0}-diag_{2}{1}'.format(
+                splitext(os.path.basename(self.view.file_name()))[0], 
+                splitext(os.path.basename(diagram_file.name))[1], suffix))
+
+        # Move file diagFilePath to temp + timestring if exists 
+        if os.path.isfile(diagFilePath):
+            move(diagFilePath, os.path.join(
+                tempfile.gettempdir(), os.path.basename(diagFilePath) + 
+                datetime.now().strftime('%Y-%m-%d_%H%M%S_%f')))
+
+        # Move diag file
+        move(diagram_file.name, diagFilePath)
+        return diagFilePath
 
     def get_default_style_dict(self):
         '''
@@ -1632,7 +1669,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         '''
         tf_suffix=''
         if preserve_ext:
-            tf_suffix = os.path.splitext(self.view.file_name())[1]
+            tf_suffix = splitext(self.view.file_name())[1]
         tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
         save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
         return tf

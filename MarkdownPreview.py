@@ -84,6 +84,7 @@ DEFAULT_EXT = [
     "admonition"
 ]
 
+__FILE__ = os.path.basename(__file__)
 
 def getTempMarkdownPreviewPath(view):
     ''' return a permanent full path of the temp markdown preview file '''
@@ -1173,10 +1174,11 @@ class MarkdownPreviewSelectCommand(sublime_plugin.TextCommand):
                 }
             )
 
+from mdLibs import mdosd as osd
 
 class MarkdownPreviewCommand(sublime_plugin.TextCommand):
     def run(self, edit, parser='markdown', target='browser'):
-        Debug('Nice')
+        
 
         settings = sublime.load_settings('MarkdownPreview.sublime-settings')
 
@@ -1388,6 +1390,7 @@ from pprint import pprint as pp
 import ast
 import json
 
+
 # Try to import sublime_diagram_plugin 
 if 'sublime_diagram_plugin' in sys.modules:
     from sublime_diagram_plugin import diagram as diag
@@ -1400,31 +1403,49 @@ else:
         '{ "inline_diagram": false }\n' % sublime.packages_path())
 
 class UmlBlock(object):
-    region = ''
-    line_count = -1
-
-    def __init__(self, region, blk_str='', blk_attr=None, diagram=None):
-        self.region = region
+    def __init__(self, blk_reg, blk_str='', blk_attr=None, diagram=None):
+        self.blk_reg = blk_reg
         self.blk_str = blk_str
-        self.attrs_dict = blk_attr[0]
-        self.attr_reg = blk_attr[1]
+        self.attr_dict = blk_attr[0]
+        self.attr_reg = blk_attr[0]
+
+        print('passed blk_reg:', blk_attr)
+
+        if blk_attr[1]:
+            if type(blk_attr[1][0]).__name__ == 'str':
+                self.attr_reg = [blk_attr[1]]
+            else:
+                # If block of attributes is given, check if attributes are neighbors
+                self.attr_reg = [blk_attr[1].pop(0)]
+
+                # TODO: TEST if only one attr where given as list
+                for reg in blk_attr[1]:
+                    if (reg.begin() - 1) != self.attr_reg[len(self.attr_reg)-1].end():
+                        break
+                    self.attr_reg.append(reg)
+
+                print('neighbors attr regions:', self.attr_reg)
+
         self.diagram = diagram
-        Debug('Anothertry')
 
-    def set_diagram(self, diagram):
-        self.diagram = diagram
+    def get_replace_reg(self):
+        if not self.blk_reg:
+            print('[ {0!s} ]: Error, self.blk_reg is None'.format(__FILE__))
+            return None
 
-    def get_diagram(self):
-        return self.diagram
+        # If no diag attrs where given, replace uml block region
+        if not self.attr_reg:
+            return self.blk_reg
 
-    def get_str(self):
-        return self.blk_str
+        attributes_region = self.attr_reg[0]
+        for reg in self.attr_reg:
+            attributes_region = attributes_region.cover(reg)
 
-    def attribute_region(self):
-        return self.attr_reg
-
-    def attribute_dict(self):
-        return self.attrs_dict
+        # If diag attr found, cover regions of uml block and attr block 
+        return sublime.Region(
+            self.blk_reg.begin(), 
+            self.blk_reg.cover(attributes_region).end() - 1
+            )
 
 
 class InlineUmlDiagram(sublime_plugin.TextCommand):     
@@ -1461,20 +1482,19 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
             # Extract PlantUML code blocks via sublime_diagram_plugin methode 
             puml_blocks = processor.extract_blocks(view)
+            dprint(puml_blocks)
 
             for block in puml_blocks:
-                add = False
+                add = True
                 for cblock in cblocks:
-                    # Check if PlantUML block is implemented as "code block" 
+                    # Check if PlantUML block is implemented as fancy "code block" 
                     if block.intersects(cblock):
-                        dprint('block.intersects(cblock): True')
                         add = False
                         break
-                    add = True
 
                 if add:
                     blocks.append(UmlBlock(
-                        region=block,
+                        blk_reg=block,
                         blk_str=view.substr(block), 
                         blk_attr=self.extract_diagram_attr(block),
                         ))
@@ -1494,14 +1514,14 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         for processor, uml_blocks in diags:
             diagram_files.extend(processor.process(
                 sourceFile=splitext(srcFile)[0] + '-', 
-                text_blocks=[blk.get_str() for blk in uml_blocks]
+                text_blocks=[blk.blk_str for blk in uml_blocks]
                 ))
 
         for k in range(len(diagram_files)):
             blk = uml_blocks[k]
-            blk.set_diagram(diagram_files[k])
-            blk.line_count = (int(view.rowcol(blk.region.end())[0]) -
-            int(view.rowcol(blk.region.begin())[0]))
+            blk.diagram = diagram_files[k]
+            blk.line_count = (int(view.rowcol(blk.blk_reg.end())[0]) -
+            int(view.rowcol(blk.blk_reg.begin())[0]))
 
         del diags, diagram_files
         settings = sublime.load_settings('MarkdownPreview.sublime-settings')
@@ -1509,44 +1529,67 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         # Check if user setting contains markdown/html tag for image placement 
         default_style = settings.get("inline_diagram_default_style")
         if not default_style:
-            default_style = '![](%s)'
-            print('\n\nError, no default_style declared in settings\n\n')
-            return False
+            dprint('No default_style declared in settings.')
+            
+            default_style = {
+            "src":   "",
+            "class": "",
+            "style": "",
+            "title": "",
+            }
 
         # Generate markdown/html image tag and replace UML blocks temporary
         for blk in reversed(uml_blocks):
             def_style = default_style
-            def_style['src'] = '{0!s}'.format(blk.get_diagram().name)
+            def_style['src'] = '{0!s}'.format(blk.diagram.name)
             img_tag = self.gen_image_tag(blk, def_style)
-
             dprint(img_tag) 
-            attrs_reg = blk.attribute_region()
 
-            view.replace( edit, 
-                sublime.Region(blk.region.begin(),
-                blk.region.cover(attrs_reg).end() - 1), 
-                img_tag )
+            view.replace(edit, blk.get_replace_reg(), img_tag)
 
         return True
 
-
-    #---------------------------------------------------------------------------
-    ## @brief      Extract optional inline diagram image/html attributes.
-    ## @return     Returns attrs dict and attributes region as tupel.
-    ##
     def extract_diagram_attr(self, block):
         '''
         Extracts optional attributes for inline diagram image/html tag
         customizations. Returns a tupel of inline attributes as dict and their
         region object.
         '''
-        attr_reg = self.view.find('\n?(@.*\n){1,}', block.end())
+        __attr_reg = [r for r in self.view.find_all('^@diag_.*$', block.end()) if \
+            '@startuml' not in self.view.substr(r) and 
+            '@enduml' not in self.view.substr(r)]
+
+        print('__attr_reg: ', __attr_reg)
+
+        attr_reg = []
+        if __attr_reg:
+            # Only if attributes are neighbors
+            print(__attr_reg[0], block)
+            if (__attr_reg[0].begin() - block.end()) <= 1:
+                attr_reg.append(__attr_reg.pop(0))
+                for reg in __attr_reg:
+                    if (attr_reg[len(attr_reg)-1].end() - reg.begin()) > 1:
+                        break
+                    attr_reg.append(reg)
+            else:
+                __attr_reg = []
+                attr_reg = []
+
+        # attr_reg = self.view.find('\n?(@.*\n){1,}', block.end())
+        dprint('found %i attrs' % len(attr_reg))
+
+        # If no @s found
+        if not attr_reg:
+            osd.info('No inline attrs').send()
+            return None, None
+
         attrs = dict()
 
-        for sub in list(filter(None, self.view.substr(attr_reg).split('\n'))):
+        # for sub in list(filter(None, self.view.substr(attr_reg).split('\n'))):
+        for attr in attr_reg:
             pair = (
-                sub.split(':', 1)[0].strip().replace('@diag_',''),
-                sub.split(':', 1)[1].strip()
+                self.view.substr(attr).split(':', 1)[0].strip().replace('@diag_',''),
+                self.view.substr(attr).split(':', 1)[1].strip()
                 )
     
             # Check diagram attribute values on JSON formatting intentions.
@@ -1556,17 +1599,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             except ValueError:
                 print('ValueError occured while trying to json.load() diagram attrs')
                 attrs[pair[0]] = pair[1]
+
         pp(attrs)
         return attrs, attr_reg
 
-
-    ##
-    ## @brief      { function_description }
-    ## @param      self            The object
-    ## @param      block           The block
-    ## @param      default_attrs   The default attributes
-    ## @return     { description_of_the_return_value }
-    ##
     def gen_image_tag(self, block, default_attrs):
         '''
         Generate the inline block replacement string in form of a html <img ../>
@@ -1575,31 +1611,39 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         attributes (See "inline diagram examples" section in package README).
         '''
         defas = default_attrs
-        inlas = block.attribute_dict()
 
-        # Check for inline block attributes
-        if 'image_tag' in inlas.keys():
-            return re.sub(r'\\n', '\n', re.sub(r'(^\"|\"$)', '',
-                inlas['image_tag'].
-                replace('src="%s"', 'src="{0!s}"'.format(defas['src']))))
+        if block.attr_dict:
+            inlas = block.attr_dict
+            # Check for inline block attributes
+            if 'image_tag' in inlas.keys():
+                return re.sub(r'\\n', '\n', re.sub(r'(^\"|\"$)', '',
+                    inlas['image_tag'].
+                    replace('src="%s"', 'src="{0!s}"'.format(defas['src']))))
 
-        # Handle style="..." sub attributes like "float": "right"
-        for subAttr in list(filter(lambda x: x not in defas.keys(), inlas.keys())):
-            inlas['style'][subAttr] = inlas.pop(subAttr).strip('"')
+            if 'style' not in inlas.keys():
+                inlas.update({'style': dict({})})
 
-        # Merge dicts "inline attributes" and "default attributes" 
-        for key in list(inlas.keys()):
-            ''' Inline diagram attributes which are not present in defas dict and
-                are string types where handled as style vps. '''
-            if key not in defas.keys():                
-                print('key %s (%s) not in defas' % (
-                    key, type(inlas[key]).__name__))
-                continue
-            defas[key] = inlas.pop(key)
-        del inlas
+            # print('defas.keys: ', defas.keys())
+            # print('inlas.keys: ', inlas.keys())
+            # print(list(filter(lambda x: x not in defas.keys(), inlas.keys())))
+
+            # Handle all style="..." sub attributes (like "float": "right" ...)
+            for subAttr in list(filter(lambda x: x not in defas.keys(), inlas.keys())):
+                inlas['style'][subAttr] = inlas.pop(subAttr).strip('"')
+
+            # Merge dicts "inline attributes" and "default attributes" 
+            for key in list(inlas.keys()):
+                ''' Inline diagram attributes which are not present in defas dict and
+                    are string types where handled as style vps. '''
+                if key not in defas.keys():                
+                    print('key %s (%s) not in defas' % (
+                        key, type(inlas[key]).__name__))
+                    continue
+                defas[key] = inlas.pop(key)
+            del inlas
 
         imgAttrs=''
-        excl = ('open', 'close', 'style')
+        excl = ['style']
         for key in list(filter(lambda x: x not in excl, defas.keys())):
             imgAttrs += '{0!s}="{1!s}" '.format(key, defas[key])
 
@@ -1609,10 +1653,6 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         return '<img {0!s} style="{1!s}"/>'.format(
             imgAttrs, imgStyle)
 
-    #---------------------------------------------------------------------------
-    ## @brief      Creates a temporary copy of views content.
-    ## @return     Temporary file wrapper object
-    ##
     def create_temporary_copy(self, preserve_ext=False):
         '''
         Copies the source file into a temporary file. Returns a
@@ -1626,12 +1666,6 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
         return tf
 
-
-    #---------------------------------------------------------------------------
-    ## @brief      { function_description }
-    ## @param      self   The object
-    ## @return     { description_of_the_return_value }
-    ##
     def extract_code_blocks(self):
         '''
         Extract all code blocks surrounded by ``` and return it's region
@@ -1652,17 +1686,13 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
 
     def undo_inline_subst(self, edit):
-        ''' Undo inline replacements '''
+        ''' 
+        Undo inline replacements.
+        '''
         self.view.replace(edit, sublime.Region(0, self.view.size()), 
             load_utf8(self.orig_src.name))
 
 
-##
-## @brief      { function_description }
-## @param      string   The string
-## @param      args     The arguments
-## @return     { description_of_the_return_value }
-##
 def dprint(string, *args):
     '''
     Verbose level configureable debug print methode. Inspects the call stack to

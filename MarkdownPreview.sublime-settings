@@ -3,6 +3,30 @@
 */
 {
     /*
+        Enable/Disable processing of inline PlantUML code blocks via 3rd party sublime_diagram_plugin.
+    */
+    "inline_diagram": true,
+
+    /*
+        Default dictionary which is used to generate (customized) html <img src="..."/> tags for inline
+        diagrams.
+
+        Diagram styles could be overloaded ba inline diagram attributes @diag_... for each PlantUML block
+        within markdown source file, see README.md for examples.
+    */
+    "inline_diagram_default_style": {
+        "src":   "",
+        "class": "",
+        "style": {},
+        "title": "",
+    },
+    "debug_levels": {
+        "MarkdownPreviewCommand": 5, 
+        "InlineUmlDiagram": 3,
+    },
+    "inline_diagram_export_dir": "${project_path}/pics/diagrams",
+
+    /*
         Sets the default opener for HTML files
 
         default - Use the system default HTML viewer

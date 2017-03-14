@@ -1386,10 +1386,7 @@ from tempfile import NamedTemporaryFile
 from shutil import copy2, move
 from datetime import datetime
 # from pprint import pprint as pp
-import inspect
-import ast
-import json
-
+import inspect, ast, json
 
 # Try to import sublime_diagram_plugin 
 if 'sublime_diagram_plugin' in sys.modules:
@@ -1442,11 +1439,16 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
     state before UML blocks has been processed inline.
     '''
     def process(self, view, edit):
+        if self.view.file_name() == None:
+            self.view.run_command('save')
+            dprint('Only saved files can be processed!')
+            return False
         ''' Starts inline PlantUML block processing '''
         dprint('Invoke PlantUML inline diagram processing...')
 
         # Create temporary backup of src file 
         self.orig_src = self.create_temporary_copy(preserve_ext=True)
+        dprint('self.orig_src: ', self.orig_src.name)
 
         srcFile = 'untitled.txt'
         if view.file_name() is not None:
@@ -1522,6 +1524,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             view.replace(edit, blk.get_replace_reg(), img_tag)
 
         return True
+
 
     def move_to_export_dir(self, diagram_file, suffix):
         '''
@@ -1659,7 +1662,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         imgStyleStr = re.sub('[\{\}\"]','', 
             json.dumps(defas['style'], separators=('; ',': ')))
 
-        return str('<img {0!s} style="{1!s};"/>'.format(imgAttrsStr, imgStyleStr))
+        if len(imgStyleStr) > 0:
+            imgStyleStr = '%s;' % imgStyleStr
+
+        return str('<img {0!s} style="{1!s}"/>'.format(imgAttrsStr, imgStyleStr))
 
     def create_temporary_copy(self, preserve_ext=False):
         '''
@@ -1669,7 +1675,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         '''
         tf_suffix=''
         if preserve_ext:
-            tf_suffix = splitext(self.view.file_name())[1]
+            if self.view.file_name() != None: 
+                tf_suffix = splitext(self.view.file_name())[1]
+            else:
+                tf_suffix = 'None'
         tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
         save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
         return tf
@@ -1734,3 +1743,64 @@ def dprint(string, *args):
             print(string)
         else:
             print(string, args)
+
+
+
+    # def query_export_dir(self):
+    #     '''
+    #     Query a valid export directory for png files.
+    #     '''
+    #     exportDir = sublime.load_settings(
+    #         'MarkdownPreview.sublime-settings').get(
+    #         'inline_diagram_export_dir')
+
+    #     # Expand variables
+    #     exportDir = sublime.expand_variables(exportDir, 
+    #         self.view.window().extract_variables())
+
+    #     # If no export dir given in user settings, export to current dir name.
+    #     if not exportDir:
+    #         # Save current buffer if it doesn't exist on filesystem
+    #         if self.view.file_name() == None:
+    #             buffName = re.findall('\w+', self.view.substr(
+    #                 self.view.find('^#+\s(\w+)',0)))[0]
+    #             if buffName != []:
+    #                 self.view.set_name(buffName)
+    #             else:
+    #                 self.view.set_name('untitled')
+    #             self.view.run_command('save')
+    #             if self.view.file_name() == None:
+    #                 raise
+
+    #             self.view.set
+    #         exportDir = os.path.dirname(self.view.file_name())
+
+    #     if not os.path.exists(exportDir):
+    #         os.makedirs(exportDir)     
+
+    # def safeMakedirs(self, path):
+    #     try:
+    #         os.makedirs(path)
+    #     except OSError as e:
+    #         if e.errno == errno.EACCES: 
+    #             alterDir = self.view.run_command('prompt_save_as')
+    #             if isWritable(alterDir):
+    #                 os.makedirs(path)
+    #             else:
+    #                 e.filename = path
+    #                 raise
+    #     return True
+
+    # def isWritable(path):
+    #     '''
+    #     Test if a given path is writeable.
+    #     '''
+    #     try:
+    #         testfile = tempfile.TemporaryFile(dir = path)
+    #         testfile.close()
+    #     except OSError as e:
+    #         if e.errno == errno.EACCES:  # 13
+    #             return False
+    #         e.filename = path
+    #         raise
+    #     return True

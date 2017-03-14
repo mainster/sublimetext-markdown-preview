@@ -119,7 +119,7 @@ Yaml frontmatter has a few special key names that are used that will not be hand
 - **references**: Can take a file path or an array of file paths for separate markdown files containing references, footnotes, etc.  Can be an absolute path or relative path.  Relative paths first use the source file's directory, and if the file cannot be found, it will use the `basepath` setting.
 - **destination**: This is an absolute file path or relative file path for when the markdown is saved to html via the build command or the `Save to HTML` command.  Relative paths first use the source file's directory, and if the file cannot be found, it will use the `basepath` setting.
 - **settings**: This is a dictionary where you can override settings that are in the settings file.
-
+    
 #### Example
 ```yaml
 ---
@@ -182,6 +182,88 @@ As mentioned earlier, almost all extensions are enabled by default, but as a ref
 ```
 
 This may be further enhanced in the future.
+
+## Inline PlantUML processing feature : 
+__Dependencies:__
+
+- sublime_diagram_plugin (git@github.com:jvantuyl/sublime_diagram_plugin.git) 
+
+Processing of _inline PlantUML code blocks_ via 3rd party sublime_diagram_plugin could be enabled/disabled in MarkdownPreview.sublime-settings. If "inline_diagram" is set to true, PlantUML blocks in markdown sources where processed/rendered via 3rd party sublime_diagram_plugin. The PlantUML code blocks are substituted temporarily by html ```<img src =.../>``` tags so the rendered png files are included in the Markdown source befor compiling.  
+Each diagram is inline customizable with optional html attributes appended after ```@enduml``` line. PlantUML blocks that are embedded as fancy code blocks, are not inline-processed. 
+
+For the rendered diagram images, an output directory could be specified in MarkdownPreview.sublime-settings, for example:
+"inline_diagram_export_dir": "${project_path}/pics/diagrams",
+
+### Example 1 :
+
+@startuml
+Title __Diag title 1__
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml
+
+This produces the include tag:
+<img src="<ur_prj>/<ur_md_file>-diag_<block-#>.png" title="" class="" style=""/>
+
+### Example 2 :
+
+@startuml
+Title __Diag title 2__
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml
+@diag_title: "The second diagrams &quot;on hover&quot; title"
+
+This produces the include tag:
+<img src="<ur_prj>/<ur_md_file>-diag_<block-#>.png" title="The second diagrams &quot;on hover&quot; title" class="" style=""/>
+
+### Example 3 :
+
+@startuml
+Title __Diag title 3__
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml
+@diag_class: "noborder"
+@diag_width: "450px"
+@diag_title: "The third diagram"
+@diag_float: "left"
+
+This produces the include tag:
+<img src="<ur_prj>/<ur_md_file>-diag_<block-#>.png" title="The third diagram" class="noborder" style="float: left; width: 450px;"/>
+
+### Example 4 :
+
+@startuml
+Title __Diag title 4__
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml
+@diag_image_tag: <center><img src="%s" class="special" style="width: 200px; background-color: red;"/></center>
+
+This produces the include tag:
+<center><img src="<ur_prj>/<ur_md_file>-diag_<block-#>.png" class="special" style="width: 200px; background-color: red;"/></center>
+
+### Example 5 :
+This example is not inline process.
+
+```
+@startuml
+Title __Diag title 1__
+Alice -> Bob: Authentication Request
+Bob --> Alice: Authentication Response
+Alice -> Bob: Another authentication Request
+Alice <-- Bob: another authentication Response
+@enduml
+```
 
 
 ## Support :

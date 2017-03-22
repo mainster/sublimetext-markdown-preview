@@ -1423,7 +1423,7 @@ class UmlBlock(object):
         # If diag attr found, cover regions of uml block and attr block 
         return sublime.Region(
             self.blk_reg.begin(), 
-            self.blk_reg.cover(attributes_region).end() - 1
+            self.blk_reg.cover(attributes_region).end()
             )
 
 
@@ -1624,6 +1624,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         attributes (See "inline diagram examples" section in package README).
         '''
         defas = default_attrs
+        align = ''
 
         if 'src' not in defas.keys():
             defas.update({'src': ''})
@@ -1643,7 +1644,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
             # Handle all style="..." sub attributes (like "float": "right" ...)
             for subAttr in list(filter(lambda x: x not in defas.keys(), inlas.keys())):
-                inlas['style'][subAttr] = inlas.pop(subAttr).strip('"')
+                if subAttr == 'align':
+                    align = inlas.pop(subAttr).strip('"')
+                else:
+                    inlas['style'][subAttr] = inlas.pop(subAttr).strip('"')
 
             # Merge dicts "inline attributes" and "default attributes" 
             for key in list(inlas.keys()):
@@ -1664,6 +1668,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         if len(imgStyleStr) > 0:
             imgStyleStr = '%s;' % imgStyleStr
+
+        if align != '':
+            if 'center' in align: 
+                return str('<center><img {0!s} style="{1!s}"/></center>'.format(imgAttrsStr, imgStyleStr))
 
         return str('<img {0!s} style="{1!s}"/>'.format(imgAttrsStr, imgStyleStr))
 

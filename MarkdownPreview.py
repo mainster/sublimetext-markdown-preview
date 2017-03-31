@@ -1213,7 +1213,42 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
 
         if procInline:
             inlineUml.undo_inline_subst(edit)
-            
+
+        # Check if article footer attribute exists in user settings
+        if settings.has("make_article_footer") & settings.has("article_footer"):
+            if settings.get("make_article_footer"):
+                # location = re.findall('<meta name=\"location\" content=\"(.*)\">', html)
+                # author = re.findall('<meta name\=\"author\" content\=\"(.*)\">', html)
+                # footicon = re.findall('<meta name\=\"footicon\" content\=\"(.*)\">', html)
+                # date = re.findall('<meta name\=\"date\" content\=\"(.*)\">', html)
+                title = re.findall('<title>(.*)<\/title>', html)
+
+                # if location:    location = location[0]
+                # if footicon:    footicon = footicon[0]
+                # if author:      author = author[0]
+                # if date:        date = date[0]
+                if title:       title = title[0]
+
+                mMetas=re.findall('<meta name=\"(.*)\" +content=\"(.*)\"', html)
+                mMetas.append(['title', title])
+                pp(mMetas)
+                meta=dict()
+               
+                [meta.update({m[0]: '{}'.format(m[1])}) for m in mMetas]
+                pp(meta)
+
+                mb = ModifyBody(html,[ 
+                    meta['title'], 
+                    meta['author'], 
+                    meta['date'], 
+                    meta['location'], 
+                    {'icon': meta['footicon'], 'width': "55px"}])
+
+                html = mb.modifiedStr()
+                del mb
+                # print(html)
+        
+
         # ''' ??? BUG ??? '''
         # ''' Regexp to remove &#160; pattern in href tag '''
         # p = re.compile('(href=\".*)(\&\#160;)(\")', re.VERBOSE)
@@ -1299,6 +1334,124 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
+
+
+from pprint import pprint as pp
+from mdLibs import mdosd as osd
+
+
+# <center>
+# <div style="width: 95%">
+#     <hr>
+#     <!-- <span style="display: inline; width: 90%"> -->
+#         <table style="width: 100%"><tr>
+#             <td style="text-align: left;">Laborbericht ELT131 LAB 01</td>
+#             <td style="text-align: center;">Del Basso, Manuel</td>
+#             <td style="text-align: center;">16-03-2017</td>
+#             <td style="text-align: left;">Zwickau, WHZ</td>
+#             <td width="auto"><img style="display: inline; height: 50px; float: right;" src="../picsInc/whz.png"></td>
+#          </tr></table>
+#     <!-- </span> -->
+#     <!-- <span style="display: inline; width: 10%; border: 1px solid red;"> -->
+#     <!-- </span> -->
+# </div>
+# </center>
+
+
+class ModifyBody(object):
+    """docstring for ModifyBody"""
+
+    def __init__(self, html, arg):
+        self.footer = [ \
+        '<center>' 
+        '<div style="width: 95%">'
+        '<hr id="hr_footer">'  
+        '<table style="width: 100%"><tr>', 
+        '</tr>'
+        '</table>'
+        '<hr id="hr_header">'  
+        '</div>'
+        '</center>' ]
+
+        self.colTemplate = '<td>{}</td>\n'
+        self.html = html
+        self.row = []
+
+        # try:
+        if str(type(arg).__name__) == 'list':
+            for k in range(len(arg)):
+                # Check if [.., .., .., [.., .., ], ...]
+                if type(arg[k]) == type(dict()): 
+                    if 'width' in arg[k].keys():
+                        icoWidth = arg[k]['width']
+                    else:
+                        icoWidth = '50px'
+
+                    if 'icon' in arg[k].keys():
+                        osd.info('icon found').send()
+
+                        self.row.append(
+                            '<td width="{1}">'
+                            '<img style="display: inline; height: {1}; float: right;" '
+                            'src="{0}"/></td>\n'.format(arg[k]['icon'], icoWidth))
+                elif k==0:
+                    self.row.append('<td style="text-align: left;">{}</td>\n'.format(arg[k]))
+                elif k==(len(arg)-1):
+                    self.row.append('<td style="text-align: right;">{}</td>\n'.format(arg[k]))
+                else:
+                    self.row.append('<td style="text-align: center;">{}</td>\n'.format(arg[k]))
+        # elif str(type(arg).__name__) == 'dict':
+        #     if 'width' in arg.keys():
+        #         icoWidth = arg['width']
+        #     else:
+        #         icoWidth = '50px'
+
+        #     if 'icon' in arg.keys():
+        #         osd.info('icon found').send()
+
+        #         self.row.append(
+        #             '<td width="{1}">'
+        #             '<img style="display: inline; height: {1}; float: right;" '
+        #             'src="{0}"/></td>\n'.format(arg['icon'], icoWidth))
+        #     elif :
+        #         self.row.append('<td style="text-align: center;">{}</td>\n'.format(arg[k]))
+
+
+        elif str(type(arg).__name__) == 'str':
+            self.row.append(arg)
+        else:
+            self.footer = ['ERROR']
+
+        self.footer.insert(1, ''.join(self.row))
+
+        # except:
+        #     osd.info('except').send()
+        #     dprint('Error while generate footer string')
+        #     return
+
+        # Create Header
+        if '<body>' in self.html:
+            key='<body>'
+            idxStart = int(self.html.find(key))
+            idxEnd = idxStart + len(key)
+            _footer = [w.replace('<hr id="hr_footer">', '') for w in self.footer]
+
+            self.html = self.html[:idxEnd] + ''.join(_footer) + \
+                self.html[idxEnd:len(self.html)]
+
+        # Create Footer
+        if '</article>' in self.html:
+            key='</article>'
+            idxStart = int(self.html.find(key))
+            idxEnd = idxStart + len(key)
+            _footer = [w.replace('<hr id="hr_header">', '') for w in self.footer]
+
+            self.html = self.html[:idxEnd] + ''.join(_footer) + \
+                self.html[idxEnd:len(self.html)]
+
+    def modifiedStr(self):
+        return self.html
+
 
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):
@@ -1388,16 +1541,16 @@ from datetime import datetime
 # from pprint import pprint as pp
 import inspect, ast, json
 
-# Try to import sublime_diagram_plugin 
-if 'sublime_diagram_plugin' in sys.modules:
-    from sublime_diagram_plugin import diagram as diag
-else:
-    error_message(
-        'sublime_diagram_plugin not available!\n\n'
-        '- Clone package sublime_diagram_plugin into \n%s:\n'
-        'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
-        '- Or disable "inline_diagram" extension via package settings:\n'
-        '{ "inline_diagram": false }\n' % sublime.packages_path())
+# # Try to import sublime_diagram_plugin 
+# if 'sublime_diagram_plugin' in sys.modules:
+from sublime_diagram_plugin import diagram as diag
+# else:
+#     error_message(
+#         'sublime_diagram_plugin not available!\n\n'
+#         '- Clone package sublime_diagram_plugin into \n%s:\n'
+#         'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
+#         '- Or disable "inline_diagram" extension via package settings:\n'
+#         '{ "inline_diagram": false }\n' % sublime.packages_path())
 
 class UmlBlock(object):
     def __init__(self, blk_reg, blk_str='', blk_attr=None, diagram=None):

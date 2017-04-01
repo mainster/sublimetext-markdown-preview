@@ -1208,12 +1208,22 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             # Process inline replacements
             procInline = inlineUml.process(self.view, edit)
 
-        ci=None
         # Check if external code import feature is enabled in user settings. 
         if settings.get("code_import"):
             dprint('code importer')
-            ci = CodeImport(self.view, edit)
-            ci.process(self.view, edit)
+            codeImport = CodeImport(self.view, edit)
+            codeImport.process(self.view, edit)
+
+        # Check if validate-title feature is enabled in user settings.  
+        if settings.get("validate_title"):
+            _title=validate_title(self.view)
+            if _title != None :
+                osd.ok('Validate Title', "Filename: {}\nTitle: {}".format(
+                    os.path.basename(self.view.file_name()), _title))
+            else:
+                osd.crit('Validate Title', 'No title meta data found!')
+
+
         # #################################################################
         # Invoke markdown compiler 
         # #################################################################
@@ -1222,8 +1232,8 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
 
         # Check if external code import feature is enabled in user settings. 
         if settings.get("code_import"):
-            if ci:
-                ci.unprocess()
+            if codeImport:
+                codeImport.unprocess()
 
         # Check if PlantUML inline diagram rendering is enabled in user settings. 
         if settings.get("inline_diagram"):
@@ -1233,30 +1243,10 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # Check if article footer attribute exists in user settings
         if settings.has("make_article_footer") & settings.has("article_footer"):
             if settings.get("make_article_footer"):
-                title = re.findall('<title>(.*)<\/title>', html)
-
-                if title:       
-                    title = title[0]
-
-                mMetas=re.findall('<meta name=\"(.*)\" +content=\"(.*)\"', html)
-                mMetas.append(['title', title])
-                pp(mMetas)
-                meta=dict()
-               
-                [meta.update({m[0]: '{}'.format(m[1])}) for m in mMetas]
-                pp(meta)
-
-                mb = AddHeaderFooter(html,[ 
-                    meta['title'], 
-                    meta['author'], 
-                    meta['date'], 
-                    meta['location'], 
-                    {'icon': meta['footicon'], 'width': "55px"}])
-
-                html = mb.modifiedStr()
-                del mb
-                # print(html)
-        
+                meta = getHtmlMetaInfo(html)
+                hf = AddHeaderFooter(html, meta)
+                html = hf.modified_html()
+                del hf
 
         # ''' ??? BUG ??? '''
         # ''' Regexp to remove &#160; pattern in href tag '''
@@ -1449,7 +1439,7 @@ from sublime_diagram_plugin import diagram as diag
 class AddHeaderFooter(object):
     """docstring for AddHeaderFooter"""
 
-    def __init__(self, html, arg):
+    def __init__(self, html, meta):
         self.footer = [ \
         '<center>' 
         '<div style="width: 95%">'
@@ -1465,6 +1455,13 @@ class AddHeaderFooter(object):
         self.html = html
         self.row = []
 
+        arg=[
+        meta['title'], 
+        meta['author'], 
+        meta['date'], 
+        meta['location'], 
+        {'icon': meta['footicon'], 'width': "55px"}]
+
         # try:
         if str(type(arg).__name__) == 'list':
             for k in range(len(arg)):
@@ -1476,12 +1473,11 @@ class AddHeaderFooter(object):
                         icoWidth = '50px'
 
                     if 'icon' in arg[k].keys():
-                        osd.info('icon found').send()
-
                         self.row.append(
                             '<td width="{1}">'
                             '<img style="display: inline; height: {1}; float: right;" '
                             'src="{0}"/></td>\n'.format(arg[k]['icon'], icoWidth))
+
                 elif k==0:
                     self.row.append('<td style="text-align: left;">{}</td>\n'.format(arg[k]))
                 elif k==(len(arg)-1):
@@ -1537,7 +1533,7 @@ class AddHeaderFooter(object):
             self.html = self.html[:idxEnd] + ''.join(_footer) + \
                 self.html[idxEnd:len(self.html)]
 
-    def modifiedStr(self):
+    def modified_html(self):
         return self.html
 
 
@@ -1622,7 +1618,6 @@ class CodeImport(object):
 
     def restoreViewport(self):
         self.view.set_viewport_position(self.orig_viewport)
-
 
 
 class UmlBlock(object):
@@ -1933,6 +1928,33 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
     #     self.view.replace(edit, sublime.Region(0, self.view.size()), 
     #         load_utf8(self.orig_src.name))
 
+def getHtmlMetaInfo(html):
+    '''Returns meta information about the html document'''
+    mMetas=re.findall('<meta name=\"(.*)\" +content=\"(.*)\"', html)
+
+    try:
+        mMetas.append(['title', re.findall('<title>(.*)<\/title>', html)[0]])
+    except:
+        mMetas.append(['title', 'NOTITLEFOUND'])
+
+    meta=dict()
+    [meta.update({m[0]: '{}'.format(m[1])}) for m in mMetas]
+    return meta
+
+def validate_title(view):
+    # Read value-key pairs from markdown head  
+    try:
+        linesReg = sublime.Region(0, view.find('\n[ \t]*\n', 0).begin() - 1)
+        mdMeta=[list(filter(None, re.split('(^[a-zA-Z]+)\: *(.*) *$', 
+            view.substr(l)))) for l in view.lines(linesReg)]
+        title = mdMeta[['Title' in m for m in mdMeta].index(True)][1]
+    except:
+        dprint('No title meta data found!')
+        return None
+
+    dprint("Filename: {}\nTitle: {}".format(
+        os.path.basename(view.file_name()), title))
+    return title
 
 def create_temporary_copy(view, preserve_ext=True):
     '''

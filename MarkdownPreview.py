@@ -1541,17 +1541,17 @@ class CodeImportBlock(object):
     attrs=dict()
     # codeLines=''
     
-    def __init__(self, keyReg, keyStr, mdFileDirname):
+    def __init__(self, keyReg, keyStr, adjRows, mdFileDirname):
+        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
         self.keyReg = keyReg
         self.keyStr = keyStr
-        
+        self.adjacentRows = adjRows
+
         self.attrs.update({"path": 
             self.keyStr.split(':')[1].strip('[\" ]').lstrip('[.\/]')})
 
-        sourceFile = os.path.join(
-            mdFileDirname, 
-            self.attrs["path"])
 
+        sourceFile = os.path.join(mdFileDirname, self.attrs["path"])
         dprint('sourceFile: ', sourceFile)
 
         if not os.path.exists(sourceFile):
@@ -1563,9 +1563,25 @@ class CodeImportBlock(object):
             osd.crit('File descriptor open returns None').send()
             return
 
-        self.codeLines = fd.readlines()
+        self.codeLines = fd.readlines()               
         fd.close()
-        # while self.codeLines[0] == '';
+
+        # If no fancy-code markers found in adjacent lines, append 
+        p=re.compile('^\`\`\`.*')
+        print('0x0?: ', len(p.findall(adjRows[0])) * len(p.findall(adjRows[1])))
+
+        if not len(p.findall(adjRows[0])) * len(p.findall(adjRows[1])):
+            print(settings.get("code_import_default_fancy_marker") + '\n')
+            try:
+                self.codeLines.insert(0, settings.get(
+                    "code_import_default_fancy_marker") + '\n')
+            except:
+                self.codeLines.insert(0, '```\n')
+            self.codeLines.append('```\n')
+
+        print('self.code(0:2): ', self.codeLines[0:2])
+        print('self.code(-2:): ', self.codeLines[-2:])
+        # pp(self.codeLines)
 
 
 class CodeImport(object):
@@ -1573,7 +1589,7 @@ class CodeImport(object):
     mdFileDirname=''
 
     """docstring for ImportExtSrcs"""
-    def __init__(self, view, edit, args=None):
+    def __init__(self, view, edit):
         if view.file_name() == None:
             view.run_command('save')
             dprint('Only saved files can be processed!')
@@ -1591,9 +1607,18 @@ class CodeImport(object):
             self.view.find_all(self.ATTRPREFIX)]
 
         for key in keyRegs:
+            # Test if the @codeimport attribute is surrounded by fancy-code markers ```
+            adjRows=(
+                self.view.substr(self.view.line(key.begin()-1)),
+                self.view.substr(self.view.line(key.end()+1))
+                )
+
             self.blkObj.append(
-                CodeImportBlock(key, 
-                    self.view.substr(key), self.mdFileDirname
+                CodeImportBlock(
+                    keyReg=key, 
+                    keyStr=self.view.substr(key), 
+                    adjRows=adjRows, 
+                    mdFileDirname=self.mdFileDirname
                     )
                 )
 

@@ -1199,35 +1199,44 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # ######################################## @@@ MDB (07-02-2017) ###
         # #################################################################
 
-        procInline = False
 
         # Check if PlantUML inline diagram rendering is enabled in user settings. 
         if settings.get("inline_diagram"):
+            procInline = False
             inlineUml = InlineUmlDiagram(self.view)
 
             # Process inline replacements
             procInline = inlineUml.process(self.view, edit)
 
+        ci=None
+        # Check if external code import feature is enabled in user settings. 
+        if settings.get("code_import"):
+            dprint('code importer')
+            ci = CodeImport(self.view, edit)
+            ci.process(self.view, edit)
+        # #################################################################
         # Invoke markdown compiler 
+        # #################################################################
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
+        # #################################################################
 
-        if procInline:
-            inlineUml.undo_inline_subst(edit)
+        # Check if external code import feature is enabled in user settings. 
+        if settings.get("code_import"):
+            if ci:
+                ci.unprocess()
+
+        # Check if PlantUML inline diagram rendering is enabled in user settings. 
+        if settings.get("inline_diagram"):
+            if procInline:
+                inlineUml.unprocess()
 
         # Check if article footer attribute exists in user settings
         if settings.has("make_article_footer") & settings.has("article_footer"):
             if settings.get("make_article_footer"):
-                # location = re.findall('<meta name=\"location\" content=\"(.*)\">', html)
-                # author = re.findall('<meta name\=\"author\" content\=\"(.*)\">', html)
-                # footicon = re.findall('<meta name\=\"footicon\" content\=\"(.*)\">', html)
-                # date = re.findall('<meta name\=\"date\" content\=\"(.*)\">', html)
                 title = re.findall('<title>(.*)<\/title>', html)
 
-                # if location:    location = location[0]
-                # if footicon:    footicon = footicon[0]
-                # if author:      author = author[0]
-                # if date:        date = date[0]
-                if title:       title = title[0]
+                if title:       
+                    title = title[0]
 
                 mMetas=re.findall('<meta name=\"(.*)\" +content=\"(.*)\"', html)
                 mMetas.append(['title', title])
@@ -1237,7 +1246,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 [meta.update({m[0]: '{}'.format(m[1])}) for m in mMetas]
                 pp(meta)
 
-                mb = ModifyBody(html,[ 
+                mb = AddHeaderFooter(html,[ 
                     meta['title'], 
                     meta['author'], 
                     meta['date'], 
@@ -1336,30 +1345,109 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.status_message('Markdown preview launched in %s' % browser)
 
 
+class MarkdownBuildCommand(sublime_plugin.WindowCommand):
+    def init_panel(self):
+        if not hasattr(self, 'output_view'):
+            if is_ST3():
+                self.output_view = self.window.create_output_panel("markdown")
+            else:
+                self.output_view = self.window.get_output_panel("markdown")
+
+    def puts(self, message):
+        message = message + '\n'
+        if is_ST3():
+            self.output_view.run_command('append', {'characters': message, 'force': True, 'scroll_to_end': True})
+        else:
+            selection_was_at_end = (len(self.output_view.sel()) == 1
+                                    and self.output_view.sel()[0]
+                                    == sublime.Region(self.output_view.size()))
+            self.output_view.set_read_only(False)
+            edit = self.output_view.begin_edit()
+            self.output_view.insert(edit, self.output_view.size(), message)
+            if selection_was_at_end:
+                self.output_view.show(self.output_view.size())
+            self.output_view.end_edit(edit)
+            self.output_view.set_read_only(True)
+
+    def run(self):
+        view = self.window.active_view()
+        if not view:
+            return
+        start_time = time.time()
+
+        self.init_panel()
+
+        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
+        parser = settings.get('parser', 'markdown')
+        if parser == 'default':
+            parser = 'markdown'
+
+        target = settings.get('build_action', 'build')
+        if target in ('browser', 'sublime', 'clipboard', 'save'):
+            view.run_command("markdown_preview", {"parser": parser, "target": target})
+            return
+
+        show_panel_on_build = settings.get("show_panel_on_build", True)
+        if show_panel_on_build:
+            self.window.run_command("show_panel", {"panel": "output.markdown"})
+
+        mdfile = view.file_name()
+        if mdfile is None or not os.path.exists(mdfile):
+            self.puts("Can't build an unsaved markdown file.")
+            return
+
+        self.puts("Compiling %s..." % mdfile)
+
+        if parser == "github":
+            compiler = GithubCompiler()
+        elif parser == 'markdown':
+            compiler = MarkdownCompiler()
+        elif parser in settings.get("enabled_parsers", ("markdown", "github")):
+            compiler = ExternalMarkdownCompiler(parser)
+        else:
+            compiler = MarkdownCompiler()
+
+        html, body = compiler.run(view, True, preview=False)
+
+        htmlfile = compiler.settings.get('builtin').get('destination', None)
+
+        if htmlfile is None:
+            htmlfile = os.path.splitext(mdfile)[0] + '.html'
+        self.puts("        ->" + htmlfile)
+        save_utf8(htmlfile, html)
+
+        elapsed = time.time() - start_time
+        if body == _CANNOT_CONVERT:
+            self.puts(_CANNOT_CONVERT)
+        self.puts("[Finished in %.1fs]" % (elapsed))
+        sublime.status_message("Build finished")
+
+
 from pprint import pprint as pp
 from mdLibs import mdosd as osd
+from sublime import error_message
+from threading import Thread
+from os.path import splitext
+from tempfile import NamedTemporaryFile
+from shutil import copy2, move
+from datetime import datetime
+# from pprint import pprint as pp
+import inspect, ast, json
+
+# # Try to import sublime_diagram_plugin 
+# if 'sublime_diagram_plugin' in sys.modules:
+from sublime_diagram_plugin import diagram as diag
+# else:
+#     error_message(
+#         'sublime_diagram_plugin not available!\n\n'
+#         '- Clone package sublime_diagram_plugin into \n%s:\n'
+#         'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
+#         '- Or disable "inline_diagram" extension via package settings:\n'
+#         '{ "inline_diagram": false }\n' % sublime.packages_path())
 
 
-# <center>
-# <div style="width: 95%">
-#     <hr>
-#     <!-- <span style="display: inline; width: 90%"> -->
-#         <table style="width: 100%"><tr>
-#             <td style="text-align: left;">Laborbericht ELT131 LAB 01</td>
-#             <td style="text-align: center;">Del Basso, Manuel</td>
-#             <td style="text-align: center;">16-03-2017</td>
-#             <td style="text-align: left;">Zwickau, WHZ</td>
-#             <td width="auto"><img style="display: inline; height: 50px; float: right;" src="../picsInc/whz.png"></td>
-#          </tr></table>
-#     <!-- </span> -->
-#     <!-- <span style="display: inline; width: 10%; border: 1px solid red;"> -->
-#     <!-- </span> -->
-# </div>
-# </center>
-
-
-class ModifyBody(object):
-    """docstring for ModifyBody"""
+class AddHeaderFooter(object):
+    """docstring for AddHeaderFooter"""
 
     def __init__(self, html, arg):
         self.footer = [ \
@@ -1453,104 +1541,89 @@ class ModifyBody(object):
         return self.html
 
 
+class CodeImportBlock(object):
+    attrs=dict()
+    # codeLines=''
+    
+    def __init__(self, keyReg, keyStr, mdFileDirname):
+        self.keyReg = keyReg
+        self.keyStr = keyStr
+        
+        self.attrs.update({"path": 
+            self.keyStr.split(':')[1].strip('[\" ]').lstrip('[.\/]')})
 
-class MarkdownBuildCommand(sublime_plugin.WindowCommand):
-    def init_panel(self):
-        if not hasattr(self, 'output_view'):
-            if is_ST3():
-                self.output_view = self.window.create_output_panel("markdown")
-            else:
-                self.output_view = self.window.get_output_panel("markdown")
+        sourceFile = os.path.join(
+            mdFileDirname, 
+            self.attrs["path"])
 
-    def puts(self, message):
-        message = message + '\n'
-        if is_ST3():
-            self.output_view.run_command('append', {'characters': message, 'force': True, 'scroll_to_end': True})
-        else:
-            selection_was_at_end = (len(self.output_view.sel()) == 1
-                                    and self.output_view.sel()[0]
-                                    == sublime.Region(self.output_view.size()))
-            self.output_view.set_read_only(False)
-            edit = self.output_view.begin_edit()
-            self.output_view.insert(edit, self.output_view.size(), message)
-            if selection_was_at_end:
-                self.output_view.show(self.output_view.size())
-            self.output_view.end_edit(edit)
-            self.output_view.set_read_only(True)
+        dprint('sourceFile: ', sourceFile)
 
-    def run(self):
-        view = self.window.active_view()
-        if not view:
-            return
-        start_time = time.time()
+        if not os.path.exists(sourceFile):
+            osd.crit('Path {} doesn\'t exist'.format(sourceFile)).send()
+            return 
 
-        self.init_panel()
-
-        settings = sublime.load_settings('MarkdownPreview.sublime-settings')
-        parser = settings.get('parser', 'markdown')
-        if parser == 'default':
-            parser = 'markdown'
-
-        target = settings.get('build_action', 'build')
-        if target in ('browser', 'sublime', 'clipboard', 'save'):
-            view.run_command("markdown_preview", {"parser": parser, "target": target})
+        fd = open(sourceFile, 'r+')
+        if fd == None:
+            osd.crit('File descriptor open returns None').send()
             return
 
-        show_panel_on_build = settings.get("show_panel_on_build", True)
-        if show_panel_on_build:
-            self.window.run_command("show_panel", {"panel": "output.markdown"})
+        self.codeLines = fd.readlines()
+        fd.close()
+        # while self.codeLines[0] == '';
 
-        mdfile = view.file_name()
-        if mdfile is None or not os.path.exists(mdfile):
-            self.puts("Can't build an unsaved markdown file.")
+
+class CodeImport(object):
+    ATTRPREFIX='@codeimport:'   
+    mdFileDirname=''
+
+    """docstring for ImportExtSrcs"""
+    def __init__(self, view, edit, args=None):
+        if view.file_name() == None:
+            view.run_command('save')
+            dprint('Only saved files can be processed!')
             return
 
-        self.puts("Compiling %s..." % mdfile)
+        self.view = view
+        self.edit = edit
+        self.mdFileDirname=os.path.dirname(view.file_name())
+        self.blkObj=[]
 
-        if parser == "github":
-            compiler = GithubCompiler()
-        elif parser == 'markdown':
-            compiler = MarkdownCompiler()
-        elif parser in settings.get("enabled_parsers", ("markdown", "github")):
-            compiler = ExternalMarkdownCompiler(parser)
-        else:
-            compiler = MarkdownCompiler()
+        ''' Start to import code blocks '''
+        dprint('Invoke "code import" processing...')
 
-        html, body = compiler.run(view, True, preview=False)
+        keyRegs = [self.view.line(keyr) for keyr in 
+            self.view.find_all(self.ATTRPREFIX)]
 
-        htmlfile = compiler.settings.get('builtin').get('destination', None)
+        for key in keyRegs:
+            self.blkObj.append(
+                CodeImportBlock(key, 
+                    self.view.substr(key), self.mdFileDirname
+                    )
+                )
 
-        if htmlfile is None:
-            htmlfile = os.path.splitext(mdfile)[0] + '.html'
-        self.puts("        ->" + htmlfile)
-        save_utf8(htmlfile, html)
+    def process(self, view, edit):
+        # Create temporary backup of src file 
+        self.orig_src = create_temporary_copy(view, preserve_ext=True)        
 
-        elapsed = time.time() - start_time
-        if body == _CANNOT_CONVERT:
-            self.puts(_CANNOT_CONVERT)
-        self.puts("[Finished in %.1fs]" % (elapsed))
-        sublime.status_message("Build finished")
+        # Store viewport position
+        self.orig_viewport = self.view.viewport_position()
+
+        for o in reversed(self.blkObj):
+            code = ''.join(o.codeLines)
+            dprint('o.codeLines: ', len(o.codeLines))
+            view.replace(edit, o.keyReg, code)
+
+    def unprocess(self):
+        '''Restore original source file contents'''
+        restore_temporary_copy(self.view, self.edit, self.orig_src)
+
+        # Register a delayed restoreViewport callbac
+        sublime.set_timeout(self.restoreViewport, 1)
+
+    def restoreViewport(self):
+        self.view.set_viewport_position(self.orig_viewport)
 
 
-from sublime import error_message
-from threading import Thread
-from os.path import splitext
-from tempfile import NamedTemporaryFile
-from shutil import copy2, move
-from datetime import datetime
-# from pprint import pprint as pp
-import inspect, ast, json
-
-# # Try to import sublime_diagram_plugin 
-# if 'sublime_diagram_plugin' in sys.modules:
-from sublime_diagram_plugin import diagram as diag
-# else:
-#     error_message(
-#         'sublime_diagram_plugin not available!\n\n'
-#         '- Clone package sublime_diagram_plugin into \n%s:\n'
-#         'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
-#         '- Or disable "inline_diagram" extension via package settings:\n'
-#         '{ "inline_diagram": false }\n' % sublime.packages_path())
 
 class UmlBlock(object):
     def __init__(self, blk_reg, blk_str='', blk_attr=None, diagram=None):
@@ -1580,7 +1653,8 @@ class UmlBlock(object):
             )
 
 
-class InlineUmlDiagram(sublime_plugin.TextCommand):     
+class InlineUmlDiagram(sublime_plugin.TextCommand): 
+    ATTRPREFIX='@diag_'   
     '''
     Provides inline processing of PlantUML blocks. Uses sublime_diagram_plugin
     methods for inline UML block extraction and rendering. Additional inline
@@ -1596,11 +1670,14 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             self.view.run_command('save')
             dprint('Only saved files can be processed!')
             return False
+
+        self.edit = edit
         ''' Starts inline PlantUML block processing '''
         dprint('Invoke PlantUML inline diagram processing...')
 
         # Create temporary backup of src file 
-        self.orig_src = self.create_temporary_copy(preserve_ext=True)
+        # self.orig_src = self.create_temporary_copy(preserve_ext=True)
+        self.orig_src = create_temporary_copy(view, preserve_ext=True)   
         dprint('self.orig_src: ', self.orig_src.name)
 
         srcFile = 'untitled.txt'
@@ -1617,7 +1694,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             blocks = []
 
             # Extract code blocks surrounded by ``` 
-            cblocks = self.extract_code_blocks()
+            cblocks = extract_code_blocks(self.view,)
 
             # Extract PlantUML code blocks via sublime_diagram_plugin methode 
             puml_blocks = processor.extract_blocks(view)
@@ -1632,14 +1709,17 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             
                 if add:
                     # Extract optional PlantUML diagram attributes 
-                    attrsObj = self.extract_diagram_attrs(block)
+                    attrsObj = extract_attrs(self.view, block, self.ATTRPREFIX)
                     dprint('found %i diag attrs: ' % len(attrsObj[0]), attrsObj[0])
 
-                    blocks.append(UmlBlock(
+                    _b_= UmlBlock(
                         blk_reg=block,
                         blk_str=view.substr(block), 
                         blk_attr=attrsObj,
-                        ))
+                        )
+                    blocks.append(_b_)
+                    dprint('Blocks:')
+                    pp(_b_.get_replace_reg())
 
             if blocks:
                 diags.append((processor, blocks,))
@@ -1677,7 +1757,9 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             view.replace(edit, blk.get_replace_reg(), img_tag)
 
         return True
-
+    
+    def unprocess(self):
+        restore_temporary_copy(self.view, self.edit, self.orig_src)
 
     def move_to_export_dir(self, diagram_file, suffix):
         '''
@@ -1737,37 +1819,37 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
             }
         return defaultDict
 
-    def extract_diagram_attrs(self, block):
-        '''
-        Extracts optional attributes for diagram image/html tag customizations. 
-        Returns a tupel of sequential inline attributes as dict and their
-        regions as list object.
-        '''
-        attr_regs = []
-        jattrsObj = dict()
+    # def extract_diagram_attrs(self, block):
+    #     '''
+    #     Extracts optional attributes for diagram image/html tag customizations. 
+    #     Returns a tupel of sequential inline attributes as dict and their
+    #     regions as list object.
+    #     '''
+    #     attr_regs = []
+    #     jattrsObj = dict()
 
-        # Find sequential related regions of @diag_ attribute lines
-        next_line = self.view.line(block.end()+1)
-        while '@diag_' in self.view.substr(next_line):
-            attr_regs.append(next_line)
-            next_line = self.view.line(attr_regs[len(attr_regs)-1].end()+1)
+    #     # Find sequential related regions of @diag_ attribute lines
+    #     next_line = self.view.line(block.end()+1)
+    #     while '@diag_' in self.view.substr(next_line):
+    #         attr_regs.append(next_line)
+    #         next_line = self.view.line(attr_regs[len(attr_regs)-1].end()+1)
 
-        for attr in attr_regs:            
-            # Split attr into dict key and value
-            key=self.view.substr(attr).split(':', 1)[0].strip().replace('@diag_','')
-            val=self.view.substr(attr).split(':', 1)[1].strip()
+    #     for attr in attr_regs:            
+    #         # Split attr into dict key and value
+    #         key=self.view.substr(attr).split(':', 1)[0].strip().replace('@diag_','')
+    #         val=self.view.substr(attr).split(':', 1)[1].strip()
 
-            # Check diagram attribute values for JSON compatibility.
-            try:
-                if key != "image_tag":
-                    jattrsObj[key] = json.loads(val)
-                else:
-                    jattrsObj[key] = val
-            except ValueError:
-                print('ValueError occured while trying to json.load() diagram attrs')
-                return dict(), list()
+    #         # Check diagram attribute values for JSON compatibility.
+    #         try:
+    #             if key != "image_tag":
+    #                 jattrsObj[key] = json.loads(val)
+    #             else:
+    #                 jattrsObj[key] = val
+    #         except ValueError:
+    #             print('ValueError occured while trying to json.load() diagram attrs')
+    #             return dict(), list()
            
-        return jattrsObj, attr_regs
+    #     return jattrsObj, attr_regs
 
     def gen_image_tag(self, uml_block, default_attrs):
         '''
@@ -1828,7 +1910,7 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         return str('<img {0!s} style="{1!s}"/>'.format(imgAttrsStr, imgStyleStr))
 
-    def create_temporary_copy(self, preserve_ext=False):
+    # def create_temporary_copy(self, preserve_ext=False):
         '''
         Copies the source file into a temporary file. Returns a
         _TemporaryFileWrapper, whose destructor deletes the temp file (i.e. the
@@ -1844,32 +1926,87 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
         save_utf8(tf.name, self.view.substr(sublime.Region(0, self.view.size())))
         return tf
 
-    def extract_code_blocks(self):
-        '''
-        Extract all code blocks surrounded by ``` and return it's region
-        objects. If in a later step, some fancy code block ``` region intersect
-        with the current processed PlantUML block region, skip inline processing
-        of this intersecting UML block. As a result, the possibility for
-        markdown fancy UML code blocks remains if no inline rendering is
-        desired.
-        '''       
-        ctags = self.view.find_all('^```.*')
+    # def undo_inline_subst(self, edit):
+    #     ''' 
+    #     Undo inline replacements.
+    #     '''
+    #     self.view.replace(edit, sublime.Region(0, self.view.size()), 
+    #         load_utf8(self.orig_src.name))
 
-        # Check for even count of code block tags ``` 
-        if len(ctags) % 2 != 0:
-            dprint('Warning, odd number of code-block tags ``` found!')
-            return []
 
-        return [sublime.Region.cover(
-            ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
+def create_temporary_copy(view, preserve_ext=True):
+    '''
+    Copies the source file into a temporary file. Returns a
+    _TemporaryFileWrapper, whose destructor deletes the temp file (i.e. the
+    temp file is deleted when the object goes out of scope).
+    '''
+    tf_suffix=''
+    if preserve_ext:
+        if view.file_name() != None: 
+            tf_suffix = splitext(view.file_name())[1]
+        else:
+            tf_suffix = 'None'
+    tf = NamedTemporaryFile(suffix=tf_suffix, delete=False)
+    save_utf8(tf.name, view.substr(sublime.Region(0, view.size())))
+    return tf
 
-    def undo_inline_subst(self, edit):
-        ''' 
-        Undo inline replacements.
-        '''
-        self.view.replace(edit, sublime.Region(0, self.view.size()), 
-            load_utf8(self.orig_src.name))
+def restore_temporary_copy(view, edit, tempFile):
+    '''Undo inline replacements. '''
+    view.replace(edit, sublime.Region(0, view.size()), 
+        load_utf8(tempFile.name))
 
+def extract_code_blocks(view):
+    '''
+    Extract all code blocks surrounded by ``` and return it's region
+    objects. If in a later step, some fancy code block ``` region intersect
+    with the current processed PlantUML block region, skip inline processing
+    of this intersecting UML block. As a result, the possibility for
+    markdown fancy UML code blocks remains if no inline rendering is
+    desired.
+    '''       
+    ctags = view.find_all('^```.*')
+
+    # Check for even count of code block tags ``` 
+    if len(ctags) % 2 != 0:
+        dprint('Warning, odd number of code-block tags ``` found!')
+        return []
+
+    return [sublime.Region.cover(
+        ctags[k], ctags[k+1]) for k in range(0, len(ctags), 2)]
+
+def extract_attrs(view, block, attr_prefix):
+    '''
+    Extracts optional attributes (@...) if the @<_prefix>xyz matches attr_prefix.
+    Returns a tupel of sequential inline attributes as dict and their
+    regions as list object.
+    '''
+    attr_regs = []
+    jattrsObj = dict()
+
+    # Find sequential related regions of @diag_ attribute lines
+    
+    next_line = view.line(block.end()+1)
+    print(view.substr(next_line))
+    while attr_prefix in view.substr(next_line):
+        attr_regs.append(next_line)
+        next_line = view.line(attr_regs[len(attr_regs)-1].end()+1)
+
+    for attr in attr_regs:            
+        # Split attr into dict key and value
+        key=view.substr(attr).split(':', 1)[0].strip().replace(attr_prefix,'')
+        val=view.substr(attr).split(':', 1)[1].strip()
+
+        # Check diagram attribute values for JSON compatibility.
+        try:
+            if key != "image_tag":
+                jattrsObj[key] = json.loads(val)
+            else:
+                jattrsObj[key] = val
+        except ValueError:
+            print('ValueError occured while trying to json.load() diagram attrs')
+            return dict(), list()
+       
+    return jattrsObj, attr_regs
 
 def dprint(string, *args):
     '''

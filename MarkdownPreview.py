@@ -1223,6 +1223,10 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             else:
                 osd.crit('Validate Title', 'No title meta data found!')
 
+        # settingsPrjSpec = sublime.load_settings(
+        #     expanded_var(self.view, '${project}'))
+        # dprint(settingsPrjSpec.get("specific_style.css"))
+        # dprint(settingsPrjSpec)
 
         # #################################################################
         # Invoke markdown compiler
@@ -1231,9 +1235,9 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # #################################################################
 
         # Check if external code import feature is enabled in user settings.
-        # if settings.get("code_import"):
-        #     if codeImport:
-        #         codeImport.unprocess()
+        if settings.get("code_import"):
+            if codeImport:
+                codeImport.unprocess()
 
         # Check if PlantUML inline diagram rendering is enabled in user settings.
         if settings.get("inline_diagram"):
@@ -1244,9 +1248,12 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         if settings.has("make_article_footer") & settings.has("article_footer"):
             if settings.get("make_article_footer"):
                 meta = getHtmlMetaInfo(html)
-                hf = AddHeaderFooter(html, meta)
-                html = hf.modified_html()
-                del hf
+                if 'author' in meta.keys():
+                    hf = AddHeaderFooter(html, meta)
+                    html = hf.modified_html()
+                    del hf
+                else:
+                    osd.warn('No "author" meta data found, abort "make_article_footer"').send()
 
         # ''' ??? BUG ??? '''
         # ''' Regexp to remove &#160; pattern in href tag '''
@@ -1609,13 +1616,12 @@ class CodeImport(object):
         ''' Start to import code blocks '''
         dprint('Invoke "code import" processing...')
 
-        keyRegs = [self.view.line(keyr) for keyr in
-            self.view.find_all(self.ATTRPREFIXES[0])]
+        keyRegs = [self.view.line(keyr) for keyr in self.view.find_all(
+            self.ATTRPREFIXES[0])]
 
-        # pp(keyRegs)
-        # for key in keyRegs:
-        #     print(key, self.view.substr(key))
-
+        # Filter all regions with scope comment.block.html  
+        keyRegs = list(filter(lambda x: 'comment.block.html' not in 
+            self.view.scope_name(x.begin()), keyRegs))
 
         for key in keyRegs:
             ''' Check for optional attributes.'''
@@ -1674,8 +1680,9 @@ class CodeImport(object):
             # Remove comments if optional attribute @codeimport_nocomments found
             if 'comments' in o.attrs.keys():
                 if o.attrs['comments'] == 'remove':
-                    code = re.sub('(?s)\/\*.*?\*\/', '', code)
-                    code = re.sub('\s*\/\/', '', code)
+                    code = re.sub('(?s)\/\*.*?\*\/\n', '', code)
+                    # code = re.sub('^\s*\/\/', '', code)
+                    code = re.sub(' *\/\/[^\!].*\n', '', code)
                     # Remove multiple empty lines except of the first
                     code = re.sub('\n{3,}', '\n\n', code)
 
@@ -1999,6 +2006,10 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
     #     '''
     #     self.view.replace(edit, sublime.Region(0, self.view.size()),
     #         load_utf8(self.orig_src.name))
+
+def expanded_var(view, env_var):
+    return sublime.expand_variables(env_var, 
+        view.window().extract_variables())
 
 def getHtmlMetaInfo(html):
     '''Returns meta information about the html document'''

@@ -1249,9 +1249,12 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             if settings.get("make_article_footer"):
                 meta = getHtmlMetaInfo(html)
                 if 'author' in meta.keys():
-                    hf = AddHeaderFooter(html, meta)
-                    html = hf.modified_html()
-                    del hf
+                    try:
+                        hf = AddHeaderFooter(html, meta)
+                        html = hf.modified_html()
+                        del hf
+                    except:
+                        osd.warn('Error while processing "make_article_footer"').send()
                 else:
                     osd.warn('No "author" meta data found, abort "make_article_footer"').send()
 

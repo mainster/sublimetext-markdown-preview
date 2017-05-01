@@ -26,6 +26,9 @@ def is_ST3():
     ''' check if ST3 based on python version '''
     return sys.version_info >= (3, 0)
 
+# Global var
+refFile = ""
+
 
 if is_ST3():
     from .helper import INSTALLED_DIRECTORY
@@ -1199,6 +1202,21 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         # ######################################## @@@ MDB (07-02-2017) ###
         # #################################################################
 
+        # If a *.sublime-project file exists within base directory of calling markdown file,
+        # skip chapter compile modifications!
+        DO_CHAPTER_COMPILE = 0
+
+        if self.view.file_name() != None:
+            DO_CHAPTER_COMPILE = settings.get("chapter_compile")
+            if DO_CHAPTER_COMPILE:
+                for file in os.listdir(os.path.dirname(self.view.file_name())):
+                    if file.endswith(".sublime-project"):
+                        print("Sublime project file", file, "found, skip chapter compile modifications!")
+                        osd.info("Sublime project file %s ".format(file) + "found, skip chapter compile modifications!").send()
+                        DO_CHAPTER_COMPILE = 0
+                        break
+            if DO_CHAPTER_COMPILE:
+                self.temp_toc_refs(edit, 'insert')
 
         # Check if PlantUML inline diagram rendering is enabled in user settings.
         if settings.get("inline_diagram"):
@@ -1223,16 +1241,18 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
             else:
                 osd.crit('Validate Title', 'No title meta data found!')
 
-        # settingsPrjSpec = sublime.load_settings(
-        #     expanded_var(self.view, '${project}'))
-        # dprint(settingsPrjSpec.get("specific_style.css"))
-        # dprint(settingsPrjSpec)
-
         # #################################################################
         # Invoke markdown compiler
         # #################################################################
         html, body = compiler.run(self.view, preview=(target in ['disk', 'browser']))
         # #################################################################
+
+        if settings.get("paragraph_numbering") == None:
+            print("%s on %s returns: None" 
+                % (os.path.basename(__file__), 'settings.get("paragraph_numbering")'))
+        else:
+            if settings.get("paragraph_numbering"):
+                html = self.addParagraphNumbering(html)
 
         # Check if external code import feature is enabled in user settings.
         if settings.get("code_import"):
@@ -1258,10 +1278,8 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 else:
                     osd.warn('No "author" meta data found, abort "make_article_footer"').send()
 
-        # ''' ??? BUG ??? '''
-        # ''' Regexp to remove &#160; pattern in href tag '''
-        # p = re.compile('(href=\".*)(\&\#160;)(\")', re.VERBOSE)
-        # html = p.sub(r'\1\3', html)
+        if DO_CHAPTER_COMPILE:
+            self.temp_toc_refs(edit, 'clear')
 
         # #################################################################
         # #################################################################
@@ -1343,6 +1361,107 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
+
+    def temp_toc_refs(self, edit, mode='insert'):
+        TOC_STRING="<!-- temp toc -->\n[TOC]\n\n"
+        insertPos=None
+
+        # Load ref chapter
+        refBuf = self.load_refs(r"(.*(quellen|reference).*\.mm?d)")
+
+        # fd = open("/tmp/MarkdownPreview.refBuff", "w+")
+        # fd.writelines(refBuf)
+        # fd.close()
+
+        # refBuf = [w.replace('=C2=A0', '') for w in refBuf]
+
+        # fd = open("/tmp/MarkdownPreview.refBuffenc", "w+")
+        # fd.writelines(refBuf)
+        # fd.close()
+
+        print('Process "temp_toc_refs" with mode="{}" ...'.format(mode))
+
+        #################################################################
+        # print(refBuf)
+        if mode == 'insert':
+            ## Insert TOC and reference chapter
+            #################################################################
+            if refBuf != None:
+                tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
+                if tmp.begin() >= 0:
+                    # If a reference "chapter" already exists, find region to
+                    # be overwritten by the actual refBuf contents.
+                    # Store insert position for new reference chapter
+                    insertPos = self.temp_toc_refs(edit, 'clear')
+
+                if insertPos == None:
+                    insertPos = self.view.size()
+
+                # Temporary append the reference chapter lines.
+                self.view.insert(edit, insertPos, "" + "".join(refBuf))
+            else:
+                print("\nNo \"Quellenangaben*.mmd\" found!")
+
+            # Insert temporary [TOC]
+            self.view.insert(edit, 0, TOC_STRING)
+            return
+
+        if mode == 'clear':
+            ## Remove TOC and reference chapter
+            #################################################################
+            if refBuf != None:
+                # Search the first line of reference file buffer within current view.
+                tmp = self.view.find(refBuf[0], 0, sublime.LITERAL)
+                if tmp.begin() >= 0:
+                    # If a reference "chapter" already exists, find region to
+                    # be overwritten by the actual refBuf contents.
+                    regErase = sublime.Region(tmp.begin(), self.view.size())
+                    # Remove old reference chapter.
+                    self.view.erase(edit, regErase)
+                    # Store insert position for new reference chapter
+            else:   
+                tmp=None
+            # Erase temporary TOC.
+            while self.view.find(TOC_STRING, 0, sublime.LITERAL).begin() >= 0:
+                self.view.erase(edit, self.view.find(TOC_STRING, 0, sublime.LITERAL))
+
+            # Return region which has possibly been cleared.
+            return tmp
+
+    def addParagraphNumbering(self, html):
+        dprint('Process "addParagraphNumbering" ...')
+        html = html.replace('article class="markdown-body"', 'article class="markdown-body paragraphNum"')
+        return html
+
+    ##
+    ## @brief      Loads references from references chapter markdown file.
+    ##
+    ## @param      self          this.
+    ## @param      refFilePatt   Regex pattern for references chapter file name.
+    ##
+    ## @return     String buffer or None
+    ##
+    def load_refs(self, refFilePatt=r"(.*quellen.*\.mm?d)"):
+        mdFileDir=os.path.dirname(self.view.file_name())
+        refFile=None
+
+        # Search pwd for a markdown file "references" (Quellenangaben).
+        for file in os.listdir(os.path.dirname(self.view.file_name())):
+            m=re.match(refFilePatt, file, re.I)
+            if m == None:
+                continue
+            else:
+                refFile=os.path.join(mdFileDir, m.group(0))
+
+        # refBuf = self.load_refs_from_file(edit, refFile)
+        if refFile != None:
+            # If a reference file has been found, read contents to line buffer.
+            fd = open(refFile, "r+")
+            refBuf = fd.readlines();
+            fd.close();
+            return refBuf
+        else:
+            return None
 
 
 class MarkdownBuildCommand(sublime_plugin.WindowCommand):
@@ -1666,6 +1785,7 @@ class CodeImport(object):
                 )
 
     def process(self, view, edit):
+        print('Process "CodeImport" ...')
         # Create temporary backup of src file
         self.orig_src = create_temporary_copy(view, preserve_ext=True)
 
@@ -1750,12 +1870,12 @@ class InlineUmlDiagram(sublime_plugin.TextCommand):
 
         self.edit = edit
         ''' Starts inline PlantUML block processing '''
-        dprint('Invoke PlantUML inline diagram processing...')
+        print('Invoke PlantUML inline diagram processing...')
 
         # Create temporary backup of src file
         # self.orig_src = self.create_temporary_copy(preserve_ext=True)
         self.orig_src = create_temporary_copy(view, preserve_ext=True)
-        dprint('self.orig_src: ', self.orig_src.name)
+        print('self.orig_src: ', self.orig_src.name)
 
         srcFile = 'untitled.txt'
         if view.file_name() is not None:
@@ -2116,6 +2236,19 @@ def extract_attrs(view, block, attr_prefix):
 
     return jattrsObj, attr_regs
 
+def get_class_from_frame(fr):
+    args, _, _, value_dict = inspect.getargvalues(fr)
+    # we check the first parameter for the frame function is
+    # named 'self'
+    if len(args) and args[0] == 'self':
+        # in that case, 'self' will be referenced in value_dict
+        instance = value_dict.get('self', None)
+        if instance:
+            # return its class
+            return getattr(instance, '__class__', None)
+    # return None otherwise
+    return None
+
 def dprint(string, *args):
     '''
     Verbose level configureable debug print methode. Inspects the call stack to
@@ -2123,6 +2256,11 @@ def dprint(string, *args):
     configured via user settings file.
     "debug_levels": { "<class name>": <level> }
     '''
+
+    # frame = inspect.stack()[1][0]
+    # return
+    # print(get_class_from_frame(frame))
+
     try:
         caller_class = inspect.stack()[1][0].f_locals["self"].__class__.__name__
         caller_method = inspect.stack()[1][0].f_code.co_name
@@ -2146,9 +2284,9 @@ def dprint(string, *args):
             print(' ')
     except:
         if not args:
-            print(string)
+            print('dprint except: ', string)
         else:
-            print(string, args)
+            print('dprint except: ' + string, args)
 
 
 

@@ -1268,6 +1268,7 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
         if settings.has("make_article_footer") & settings.has("article_footer"):
             if settings.get("make_article_footer"):
                 meta = getHtmlMetaInfo(html)
+                pp(meta)
                 if 'author' in meta.keys():
                     try:
                         hf = AddHeaderFooter(html, meta)
@@ -1277,6 +1278,12 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                         osd.warn('Error while processing "make_article_footer"').send()
                 else:
                     osd.warn('No "author" meta data found, abort "make_article_footer"').send()
+
+        # Check if feature "!DISABLE href in TOC" is enabled 
+        if settings.get("disable_href_in_toc")["enable_feature"]:
+            keySeqs = settings.get("disable_href_in_toc")["key_sequences"]
+            start, stop, tocStr = self.getModifiedTocBlock(html, keySeqs)
+            html = html[0:start-1] + tocStr + html[stop-1:-1]
 
         if DO_CHAPTER_COMPILE:
             self.temp_toc_refs(edit, 'clear')
@@ -1361,6 +1368,34 @@ class MarkdownPreviewCommand(sublime_plugin.TextCommand):
                 sublime.error_message('cannot execute "%s" Please check your Markdown Preview settings' % browser)
             else:
                 sublime.status_message('Markdown preview launched in %s' % browser)
+
+    def getModifiedTocBlock(self, html, keySeq):
+        tocStartIdx = html.find('<div class="toc">')
+        tocEndIdx = html.find('</div>', tocStartIdx+1)
+        
+        if tocStartIdx < 0 or tocEndIdx < 0:
+            return None
+
+        _s=[]
+        m=re.compile(''.join([
+            '(.*)',
+            '(<a href\=\"#.*\">)',
+            '(\{})',
+            '(.*)',
+            '(<\/a>)',
+            '(.*$)']).format(keySeq))
+        for l in html[tocStartIdx:tocEndIdx].splitlines():
+            try:
+                gr = m.findall(l)[0]
+               
+                if len(gr) >= 5:
+                    _s.append(''.join([
+                        gr[0], '<span style="color: #959595;">',
+                        gr[3] , '</span>', gr[5]]))
+            except:
+                _s.append(l)
+
+        return (tocStartIdx, tocEndIdx, '\n'.join(_s))
 
     def temp_toc_refs(self, edit, mode='insert'):
         TOC_STRING="<!-- temp toc -->\n[TOC]\n\n"
@@ -1550,19 +1585,76 @@ from os.path import splitext
 from tempfile import NamedTemporaryFile
 from shutil import copy2, move
 from datetime import datetime
-# from pprint import pprint as pp
 import inspect, ast, json
 
-# # Try to import sublime_diagram_plugin
-# if 'sublime_diagram_plugin' in sys.modules:
+# Try to import sublime_diagram_plugin
 from sublime_diagram_plugin import diagram as diag
-# else:
-#     error_message(
-#         'sublime_diagram_plugin not available!\n\n'
-#         '- Clone package sublime_diagram_plugin into \n%s:\n'
-#         'git clone https://github.com/jvantuyl/sublime_diagram_plugin\n\n'
-#         '- Or disable "inline_diagram" extension via package settings:\n'
-#         '{ "inline_diagram": false }\n' % sublime.packages_path())
+
+# class MarkdownFoldByLevelCommand(sublime_plugin.TextCommand):
+#     def run(self, edit, level='current'):
+#         view = self.view
+#         if level == "current":
+#             ''' Query current selected section depth '''
+#             currentChapterDepth = self.reverseFind('^#+', 500)
+
+
+class MarkdownFoldCommand(sublime_plugin.TextCommand):
+    def run(self, edit, level=-1):
+        view = self.view
+
+        if level < 0:
+            ''' Query current selected section depth '''
+            theLevel = self.reverseFind('^#+', 500)
+        else:
+            theLevel = level
+
+        ''' Query markdown header section positions in current view '''
+        heads = self.getHeaderSections()
+        ''' Replace current selected regions '''
+        view.selection.clear()
+        view.selection.add_all(heads[theLevel-1])
+        ''' Toggle fold selected chapters '''
+        view.run_command("fold_section")
+
+    def getHeaderSections(self, depth=10):
+        view = self.view
+        sects=[]
+        [sects.append(view.find_all('^' + '#'*k + ' ')) for k in range(1, depth)]
+        return sects
+        # return view.find_by_selector('meta.block-level.markdown') 
+
+    def reverseFind(self, pattern='^#+', maxReverseLines=200):
+        view = self.view
+
+        try:
+            if view.sel()[0].empty():
+                view.run_command("expand_selection", {"to": "line"})            
+        except (ValueError, IndexError):
+            dprint('Nothing selected so reverse search from buffer end!')
+            view.selection.add(view.__len__())            
+            view.run_command("expand_selection", {"to": "line"})            
+
+        selected=[]
+
+        for k in range(1, maxReverseLines + 1):
+            ''' End of buffer reached? '''
+            if view.sel()[0] == selected:
+                break
+            selected = view.sel()[0]
+
+            if re.findall(pattern,view.substr(view.line(selected))):
+                break
+            view.selection.add(view.line(view.sel()[0].begin()-1))
+
+        try:
+            return len(re.findall('^#+', view.substr(view.line(view.sel()[0])))[0])
+        except (ValueError,IndexError):
+            if k == maxReverseLines:
+                dprint('No matches for reverse finding pattern \'{}\' '.format(pattern) +
+                    'within the last {} lines!'.format(maxReverseLines))
+            else:
+                dprint('No matches for reverse find pattern "{}"'.format(pattern))
+            return int(-1)
 
 
 class AddHeaderFooter(object):
